@@ -7,6 +7,8 @@ dist/
 dev-harness/
 pnpm-lock.yaml
 pnpm-workspace.yaml
+# pnpm 11 per-project content-addressable store (dcf init installs via pnpm)
+.pnpm-store/
 
 *.tgz
 

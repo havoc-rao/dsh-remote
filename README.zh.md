@@ -178,8 +178,14 @@ npx --yes @deepseek-ai/dsh plugin --profile web remove dsh-remote   # 恢复用�
 
 ## 开发（沙箱优先，勿改产品）
 
-迭代**一律在沙箱**里做，绝不手工改产品 profile——产品 profile 由插件管理器重管，
-重装会把手工部署的文件还原掉。用仓库内的辅助脚本：
+开发形态分两种：
+
+- **沙箱优先**（本文，依赖 DSH Desktop 应用包）：迭代一律在沙箱里做，绝不手工改产品 profile——产品 profile 由插件管理器重管，重装会把手工部署的文件还原掉。
+- **link 部署 · 动态更新**（源码直连或物化拷贝，如本仓库在源码形态机器上的用法）：`node scripts/build.mjs` 本地 build 并就地更新产物，运行中的 dsh HMR 自动热更新，无需沙箱。
+
+**完整流程、运行时拓扑、验证手段与常见问题见 [`docs/develop.md`](docs/develop.md)。**
+
+沙箱脚本：
 
 ```bash
 scripts/dev-run.sh --restart   # 启动 / 重启隔离沙箱

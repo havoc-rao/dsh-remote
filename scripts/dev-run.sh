@@ -104,6 +104,22 @@ sync_lib() {
   cp "$SRC/package.json" "$INSTALL_DIR/package.json"
   cp "$SRC/cordis.patch.yml" "$INSTALL_DIR/cordis.patch.yml"
   echo "   lib/ 已覆盖为源码最新（$(grep '"version"' "$SRC/package.json" | head -1 | tr -d ' ",' )）"
+  # ── dsh-code-finder 元素级注入（dev 语义，零构建插件官方路径）──
+  # clean 源码 → 注入镜像（--out），attrs 烘焙「仓库源码路径 + clean 行号」：
+  # 浏览器执行镜像里注入版 client.js，点击打开/跳转指向仓库 lib/client.js 精确位置。
+  # 仓库 lib/ 永不落注入（发布零负担）；镜像与日志在 dev-harness/（已 gitignore）。
+  # 未安装 dcf 依赖（如 clone 后未 pnpm install）时静默跳过，纯 degrade。
+  if [ -x "$WORKSPACE/node_modules/.bin/dcf" ]; then
+    echo "   dsh-code-finder: 生成浏览器半注入镜像…"
+    mkdir -p "$DEV_ROOT"
+    if NODE_ENV=development "$WORKSPACE/node_modules/.bin/dcf" instrument "$SRC/lib" --write --out "$DEV_ROOT/dcf" >"$DEV_ROOT/dcf.log" 2>&1 &&
+       grep -q 'data-locatorjs' "$DEV_ROOT/dcf/lib/client.js" 2>/dev/null; then
+      cp "$DEV_ROOT/dcf/lib/client.js" "$INSTALL_DIR/lib/client.js"
+      echo "   client.js 已替换为注入版（$(grep -c data-locatorjs "$INSTALL_DIR/lib/client.js") 处 data-locatorjs）"
+    else
+      echo "⚠  dsh-code-finder 注入未产生（详情见 $DEV_ROOT/dcf.log），client.js 保持源码原样（名字级/搜索级仍可用）"
+    fi
+  fi
 }
 
 build_profile() {

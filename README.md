@@ -190,9 +190,19 @@ After a successful start, `Settings → 远程工作区` appears and the "Add wo
 
 ## Development (sandbox, not product)
 
-Iterate **in the sandbox**, never by hand-editing a product profile — the
-product profile is re-managed by the plugin manager and reverts hand-deployed
-files on reinstall. Use the helper script:
+Two development shapes:
+
+- **Sandbox-first** (this section, needs the DSH Desktop app bundle): iterate
+  in the sandbox, never by hand-editing a product profile — the product profile
+  is re-managed by the plugin manager and reverts hand-deployed files on reinstall.
+- **Link-deployed · dynamic update** (profile points at this checkout, or a
+  materialized copy): `node scripts/build.mjs` builds locally and updates the
+  installed artifacts in place; the running dsh hot-swaps via HMR — no sandbox.
+
+**Full flow, runtime topology, verification steps and troubleshooting:
+[`docs/develop.md`](docs/develop.md).**
+
+Use the helper script:
 
 ```bash
 scripts/dev-run.sh --restart   # start / restart the isolated sandbox
