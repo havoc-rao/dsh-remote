@@ -70,7 +70,7 @@ DSH 的 Web 界面刻意只监听 `127.0.0.1`（CLI 为安全拒绝 `--host 0.0.
 - **双向 SFTP 同步（三路冲突检测）** —— `rw_sync`（远程→镜像）、`rw_push`（镜像→远程）。两边都改过的文件会列出冲突、绝不静默覆盖（`force=true` 覆盖）。默认 **深度 8 / 2000 文件**，触顶会标明 **`TRUNCATED`**。支持 dry-run、后台任务、gitignore 风格 ignore 规则。
 - **模型工具（20 个）** —— `rw_info`、`rw_connect`、`rw_pick_workspace`、`rw_list_dir`、`rw_stat`、`rw_read_file`（utf-8/gbk）、`rw_write_file`、`rw_edit`（字面替换 + mtime 乐观锁）、`rw_append`、`rw_mkdir`、`rw_remove`、`rw_move`、`rw_exec`、`rw_search`（POSIX 优先 rg/grep，否则 SFTP 遍历）、`rw_download`/`rw_upload`、`rw_forward`、`rw_sync`、`rw_push`、`rw_disconnect`。
 - **端口转发面板** —— 设置页或 `rw_forward` 创建/启停本地与反向隧道。
-- **侧栏远程编辑** —— 远程文件 tab 可编辑并保存到远端（mtime 乐观锁）。**v0.8.19** 起文件操作按会话绑定机器。
+- **侧栏远程编辑** —— 远程文件 tab 可编辑并保存到远端（mtime 乐观锁，远端被并发改动时返回 409 + 提示重新读取）。**v0.8.19** 起文件操作按会话绑定机器。目录树与文件视图按**内置文件侧 UI** 重构：VSCode 式 34px 行 + 缩进参考线、DSH 设计令牌（跟随深浅色主题）、悬停 **@文件** 引用胶囊（把本地镜像路径插入输入框）、符号链接徽标、DSH 风格右键菜单（下载到本地镜像 / 重命名 / 删除 / 新建目录）。
 - **命令审计** —— `rw_exec`/写/删/移动/转发写入 `audit.log`；设置页显示最近 30 条。
 - **连接体检** —— 设置页「测试连接」按类别提示（认证 / 网络 / 主机指纹 / 超时）。
 - 当前 `user@host:/path` 会注入每次系统提示，让 Agent 明确自己的工作根。
