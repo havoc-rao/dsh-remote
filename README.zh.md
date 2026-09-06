@@ -228,6 +228,25 @@ scripts/dev-run.sh --status    # 是否在运行
 | `fileReferenceMaxEntries` | int | `3000` | 一棵远程工作区索引最多保留多少条目 |
 | `fileReferenceExcludedDirectories` | string[] | `[.git, node_modules, dist, build, out, coverage, target, .next, .nuxt, .turbo, .venv, __pycache__, .pytest_cache, .mypy_cache, .gradle]` | 远程 `@` 遍历跳过的目录名 |
 | `fileReferenceTimeoutMs` | int | `4000` | 一次远程索引遍历的墙钟预算（超时用已扫到的部分结果，不让光标等） |
+| `sidebarDirectoryFlowSlot` | string | `''`（自动） | 侧栏 directory-flow 槽位 key（DirPicker 侧栏注册，见下） |
+
+**`sidebarDirectoryFlowSlot` — 侧栏 directory-flow 槽位 key（装配期自动匹配）**：remote 目录选择器（DirPicker）的**侧栏**注册使用的 slot key；hero 注册永远保持官方 `conversation.hero.workspace.directoryFlow`。留空（默认）= 宿主在装配期按下述优先级链决定最终值：
+
+1. 显式 `sidebarDirectoryFlowSlot` config（profile 层写静态 `config` patch 会**整字段替换**该行的 config，天然覆盖自动匹配）；
+2. dsh-remote 自带 `cordis.patch.yml` 里的自动匹配表达式（`config: !!js` 扫描 composed patch stack 找 `dsh-enhanced-workspace` 行）；
+3. 宿主运行期兜底探测 `ctx.loader.entries()`；
+4. 官方默认 `sidebar.workspaces.directoryFlow`。
+
+原因：dsh-enhanced-workspace 以 priority -1 遮蔽 `sidebar.workspaces`，官方子槽位 `sidebar.workspaces.directoryFlow` 会「已注册、无人渲染」；组合该插件时改用其自有 hole `enhanced-workspace.workspace.directoryFlow`（flowOwner 契约与官方一致）。装/卸 dsh-enhanced-workspace 自动跟随，无需任何构建期标志/ENV/烘焙（旧 `DSH_REMOTE_SIDEBAR_DIRECTORY_FLOW_SLOT` 构建期烘焙机制已移除）。最终值经 `GET /dsh-remote/slot-config` 在客户端装配期下发；读取失败/未设置 → 客户端用官方 key 兜底。改动**重启宿主**生效（开发模式 HMR 可能热生效 patch 编辑）。
+
+显式覆盖示例 —— profile 的 `cordis.patch.yml`（`~/.dsh/profiles/<name>/cordis.patch.yml`，或 `$DSH_HOME/cordis.patch.yml` 对所有 profile 生效）：
+
+```yaml
+- id: dsh-remote
+  name: 'dsh-remote'
+  config:
+    sidebarDirectoryFlowSlot: enhanced-workspace.workspace.directoryFlow
+```
 
 ## 安全提醒
 

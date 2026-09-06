@@ -28,6 +28,11 @@
 //   node scripts/build.mjs --instrument    # 同步注入版 client.js（dcf 可用时）
 //   node scripts/build.mjs --help
 //
+// 侧栏 directory-flow 槽位 key 不再构建期烘焙：由 cordis.patch.yml 的
+// `config: !!js` 表达式 + 宿主运行期探测在装配期自动判定，经
+// GET /dsh-remote/slot-config 下发给浏览器 half（见 lib/index.js 与
+// cordis.patch.yml）。仓库 lib/ 恒为官方默认字面量，产物逐字节等价。
+//
 // 退出码：0=成功；1=build 闸门失败或同步出错；2=用法错误。
 
 import { execFileSync } from 'node:child_process'

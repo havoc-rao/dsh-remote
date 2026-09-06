@@ -3,6 +3,34 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 新增：侧栏 directory-flow 槽位 key —— cordis config 风格 + 装配期自动匹配
+
+- **config 字段 `sidebarDirectoryFlowSlot`**：DirPicker **侧栏**注册使用的
+  directory-flow slot key，schemastery schema 声明（`z.string().default('')`），
+  默认（留空）= 官方 `sidebar.workspaces.directoryFlow`，独立安装行为零变化；
+  hero 注册永远保持官方 `conversation.hero.workspace.directoryFlow`，不受影响。
+- **装配期自动匹配**：dsh-remote 自带 `cordis.patch.yml` 的 dsh-remote 行新增
+  `config: !!js` 表达式（与 sidecar guard 同源：扫描 `ctx.loader.resolve('include')
+  .subtree.config.patches` 的 insert 行，含 `name === 'dsh-enhanced-workspace'` /
+  `id === 'enhanced-workspace'` → 返回 `{ sidebarDirectoryFlowSlot:
+  'enhanced-workspace.workspace.directoryFlow' }`，否则 `{}`）。装/卸
+  dsh-enhanced-workspace 自动跟随，无需任何构建期标志/ENV/烘焙。
+- **优先级链**：① 显式 config（profile 层静态 `config` patch 整字段替换，天然覆盖
+  表达式）> ② patch 表达式 > ③ 宿主运行期兜底探测 `ctx.loader.entries()` > ④ 官方
+  默认。最终值经新增 `GET /dsh-remote/slot-config` 下发（响应含 `source` 标注命中
+  优先级，便于诊断）。
+- **客户端读取时序**：`apply` 改为 async，先限时 fetch `slot-config`（3s 超时，
+  失败/未设置 → 官方 key 兜底），拿到值后才声明侧栏注入 + 注册；外层 hero inject
+  仍同步声明（slots.inject 声明语义），侧栏 inject 留在 hero 回调（渲染期执行，
+  晚于异步值就位）。CJS bundle 无 top-level await。
+- **ENV 烘焙机制退役**：`scripts/bake.mjs` 删除；`scripts/build.mjs` /
+  `scripts/sync-profile.sh` / `sync.sh` 的烘焙接线与
+  `DSH_REMOTE_SIDEBAR_DIRECTORY_FLOW_SLOT` 全部移除；`sync-profile.sh` 的槽位
+  回显改为「profile 依赖静态预期 + 运行宿主 `slot-config` 端点实际值」。
+- 修复目标不变：组合 dsh-enhanced-workspace（priority -1 遮蔽 `sidebar.workspaces`）
+  时官方子槽位「已注册、无人渲染」导致侧栏选择器不可见的旧问题，现由装配期自动
+  跟随解决，且**无需**在构建/同步时设任何 ENV。
+
 ### UI：远程文件侧边栏按 DSH-better-sidebar「文件侧」风格重构
 
 - **远程文件目录树**（Remote Files explorer）与内置本地文件树同款观感：34px 行高 +

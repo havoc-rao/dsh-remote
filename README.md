@@ -257,6 +257,25 @@ and should be done only when you intend to release.
 | `fileReferenceMaxEntries` | int | `3000` | max entries retained in one remote workspace's `@` index |
 | `fileReferenceExcludedDirectories` | string[] | `[.git, node_modules, dist, build, out, coverage, target, .next, .nuxt, .turbo, .venv, __pycache__, .pytest_cache, .mypy_cache, .gradle]` | directory basenames the remote `@` traversal skips |
 | `fileReferenceTimeoutMs` | int | `4000` | wall-clock budget for one remote `@` index pass (on expiry the partial index answers rather than making the caret wait) |
+| `sidebarDirectoryFlowSlot` | string | `''` (auto) | sidebar directory-flow slot key for the remote workspace picker (DirPicker). Empty = auto-match (see below). |
+
+**`sidebarDirectoryFlowSlot` — auto-matched sidebar directory-flow slot key**: the *sidebar* registration of the remote workspace directory picker (DirPicker) uses this slot key; the hero registration always stays on the official `conversation.hero.workspace.directoryFlow`. Empty (default) = the host picks the effective key at assembly time, in this order:
+
+1. an explicit `sidebarDirectoryFlowSlot` config (a static `config` patch in your profile layer **replaces the whole config field**, so it naturally overrides the auto match below);
+2. the auto-match expression in dsh-remote's own `cordis.patch.yml` (`config: !!js` scanning the composed patch stack for a `dsh-enhanced-workspace` row);
+3. a host runtime fallback probe over `ctx.loader.entries()`;
+4. the official default `sidebar.workspaces.directoryFlow`.
+
+Why: dsh-enhanced-workspace shadows `sidebar.workspaces` at priority -1, which leaves the official sub-slot `sidebar.workspaces.directoryFlow` *registered-but-never-rendered*; its own hole `enhanced-workspace.workspace.directoryFlow` (same flowOwner contract) is used instead when that plugin is mounted. Installing/uninstalling dsh-enhanced-workspace therefore follows automatically — no build-time flag, no env, nothing to bake (the old `DSH_REMOTE_SIDEBAR_DIRECTORY_FLOW_SLOT` build-time baking mechanism is gone). The value is delivered to the browser half over `GET /dsh-remote/slot-config` at client assembly; if that read fails, the client falls back to the official key. Changes take effect on the next host restart (config is evaluated at assembly; dev-mode HMR may apply patch edits live).
+
+Explicit override example — `cordis.patch.yml` of your profile (`~/.dsh/profiles/<name>/cordis.patch.yml`, or `$DSH_HOME/cordis.patch.yml` for every profile):
+
+```yaml
+- id: dsh-remote
+  name: 'dsh-remote'
+  config:
+    sidebarDirectoryFlowSlot: enhanced-workspace.workspace.directoryFlow
+```
 
 ## FAQ / troubleshooting
 
