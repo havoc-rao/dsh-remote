@@ -1,5 +1,18 @@
 # dsh-remote bundle patch: inserts only this plugin into a profile's layer stack.
 #
+# ── 侧栏「添加工作区」的槽位 key（sidebarDirectoryFlowSlot）──
+# 本文件就是 DSH 根目录（$DSH_HOME）配置族里决定该 key 的「bundle 层 patch」：
+# 装配期 DSH 按 profile package.json 的 dsh.profile.bundles 逐 bundle 叠 patch
+# （本文件是 dsh-remote 那一层），再叠 profile 层 cordis.yml/cordis.patch.yml 与
+# home/overlay 层，物化成 composed patch stack（include.subtree.config.patches）。
+# 下面第 1 行的 config: !!js 表达式扫描它，自动算出「添加工作区」（DirPicker）
+# 的侧栏注册 key：发现 dsh-enhanced-workspace 行 → enhanced-workspace.workspace.
+# directoryFlow；未发现 → {}（schemastery 默认 = 官方 sidebar.workspaces.
+# directoryFlow）。完整优先级链与各文件职责：docs/develop.md §4 —— 宿主半
+# lib/index.js 的 effectiveSlot 汇聚（显式 config > 本表达式 > loader.entries()
+# 兜底 > 官方默认）并经 GET /dsh-remote/slot-config 下发；浏览器半 lib/client.js
+# 读取后注册 DirPicker（hero 注册恒用官方 key，不受此影响）。
+#
 # Since v0.7.2 dsh-remote ships dsh-better-sidebar as a hard dependency and
 # mounts it here, so `dsh plugin add dsh-remote` brings up the sidebar with
 # zero extra steps. The sidebar row uses a DEDICATED id (`dsh-remote-sidebar`)

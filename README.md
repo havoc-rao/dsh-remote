@@ -106,7 +106,21 @@ optional and is no longer a dependency or an automatically mounted row. This
 keeps the SSH tools and settings UI independent from a particular sidebar
 implementation.
 
-To add the optional Web remote-file explorer/editor, install both bundles:
+> **Sidebar explorer under remote sessions (v0.8.12+)**: with a sidebar
+> **v0.18.0+**, the Files panel's tree shows TWO starting points in a remote
+> session — the local cwd root (local semantics, search/upload/git all kept)
+> plus a remote root contributed by dsh-remote through the `fileTreeSource`
+> slot's `roots` (labelled with the remote workspace name; expansions run
+> against the LIVE remote `/dsh-remote/ls`). Local-only abilities on the
+> remote root degrade OFF per the slot contract (absent capabilities = off);
+> the local root is never taken over. With a v0.17 sidebar the fallback is
+> the full-tree remote takeover; older versions keep the local source — the
+> tree always works.
+
+> **Upgrading from ≤0.8.6 with a standalone sidebar?** You may keep the
+> standalone `dsh-better-sidebar` bundle (any order) — 0.8.7+ no longer
+> crashes. Or remove it from `bundles` and let dsh-remote mount the embedded
+> copy (version ^0.14.0).
 
 ```bash
 dsh plugin add dsh-remote

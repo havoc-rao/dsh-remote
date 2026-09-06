@@ -3,6 +3,27 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 新增：侧栏 Files 面板文件树注入 —— fileTreeSource slot（multi-root 双起点）
+
+- **dsh-better-sidebar v0.18.0+ 多起点文件树**：远程会话下 Files 面板的树呈现
+  **两个起点**——本地起点（会话 cwd，本地语义、搜索/上传/git 等能力全保留，永不
+  被接管）+ 远程起点（dsh-remote 经 `ctx.betterSidebar.registerFileTreeProvider`
+  注册 provider 的 `roots()` 注入：label = 远程工作区名，`dir` = 会话解析出的远程
+  根，展开浏览全部走 `GET /dsh-remote/ls`）。本地会话保持单起点，渲染路径逐字节
+  不变。
+- **契约**：provider `{ id: 'dsh-remote', match, createSource, roots }`；
+  `roots(sessionId, cwd) → FileTreeProviderRoot[] | Promise<…>`
+  （`{ id, label, dir }`），空数组/解析失败 = 不贡献起点；远程起点的本地能力
+  （upload/download/git/openWith/search）未声明即降级关闭（缺省 off）。
+- **兼容回退**：侧边栏 v0.17 无 `roots` 语义 → 回退 v0.17 整树远程接管（`list()`
+  内建「本地镜像路径 → 远程路径」映射，双形式兼容）；更旧版本无 slot → 本地源，
+  树始终可用。feature 探测：`bs.features.includes('fileTreeSource')`。
+- **host 半**：`GET /dsh-remote/status` 增加 `mirrorRoot` 字段（本地镜像根，用于
+  同步判定远程会话）；client 半注册前先取回缓存，`roots`/`list` 共享会话远程根
+  TTL 缓存（10s），减少 resolve-mirror 往返。
+- 依赖方改动：dsh-better-sidebar **v0.18.0+**（`fileTreeSource` slot 的
+  multi-root 扩展）。
+
 ### 新增：侧栏 directory-flow 槽位 key —— cordis config 风格 + 装配期自动匹配
 
 - **config 字段 `sidebarDirectoryFlowSlot`**：DirPicker **侧栏**注册使用的

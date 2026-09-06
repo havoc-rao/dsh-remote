@@ -83,13 +83,76 @@ grep -rl "bg-overlay" <DSH_HOME>                            # 找还有旧标记
 
 **本次的坑**：`dev-harness/dcf/lib/client.js`（旧 dcf 注入产物，349184B）曾被物化进 `/private/tmp/dsh-verify/profiles/web/node_modules/dsh-remote/`，实例逐字节服务它 —— 只更新 `~/.dsh` 和沙箱目录是看不到效果的，必须把 `dsh-*` 验证实例也纳入发现规则（build.mjs 已内置，`findInstalls()` 见源码）。
 
-## 4. 与 `scripts/dev-run.sh` 沙箱的关系
+## 4. 侧栏 directory-flow 槽位 key：DSH 根目录配置 → 装配期自动匹配
+
+侧栏「添加工作区」远程目录选择器（DirPicker）的**注册槽位 key** 由装配期配置自动
+决定，不参与构建期烘焙（v0.7 前是 `DSH_REMOTE_SIDEBAR_DIRECTORY_FLOW_SLOT`
+构建期注入，已移除）。关键洞见：**决定这个 key 的 config 就散在 DSH 根目录
+（`$DSH_HOME`）的配置族里**——DSH 装配期把它们叠成一个 composed patch stack，
+插件侧用 `!!js` 表达式 + 运行期探测从里面读出 key。
+
+**DSH 根目录配置 → 槽位 key 的对应关系**：
+
+| DSH 根目录配置文件 | 在机制中的角色 |
+|---|---|
+| `~/.dsh/profiles/<p>/package.json` 的 `dsh.profile.bundles` | 声明 bundle 列表；**每个 bundle 贡献一层 patch**，dsh-remote 的 bundle 层 patch 就是仓库根 `cordis.patch.yml` |
+| `~/.dsh/profiles/<p>/cordis.yml` + `cordis.patch.yml` | profile 层 patch（叠在 bundle 层之后、home/overlay 层之前；本机当前为空数组） |
+| home / overlay 层 patch | 最后叠入；`!!js` 表达式能看到整个已物化的 `patches` 数组 |
+
+这几层按序叠成 `include.subtree.config.patches`（即 composed patch stack），
+`cordis.patch.yml` 的 `config: !!js` 表达式（算 `sidebarDirectoryFlowSlot`）与
+`disabled` 守卫（dsh-better-sidebar 去重）**共享同一份纯数据扫描**——不依赖
+`loader.entries()` 创建顺序、不读其他行的 `disabled`，因此顺序无关且无递归。
+
+**优先级链**（宿主半 `lib/index.js` 的 `effectiveSlot`；`source` 标注命中级别）：
+
+1. **显式 config**：任何层对 dsh-remote 行的静态 `config` patch 写
+   `sidebarDirectoryFlowSlot: <key>`（patch 机制整字段替换该行 config → 天然赢）。
+2. **patch 表达式**：`cordis.patch.yml` 的 `config: !!js` 扫描 composed patch
+   stack，发现 `dsh-enhanced-workspace` 行 → `enhanced-workspace.workspace.
+   directoryFlow`；未发现 → `{}`（schemastery 默认值 = 官方 key）。
+3. **宿主运行期兜底**：`loader.entries()` 探测（patch stack 不可见的注入形态，
+   如 HMR / 运行期注入的 entry）。
+4. **官方默认**：`sidebar.workspaces.directoryFlow`。
+
+**为什么需要这套机制**：dsh-enhanced-workspace 以 priority -1 遮蔽官方
+`sidebar.workspaces`，其子槽位 `sidebar.workspaces.directoryFlow` 处于「已注册、
+永远无人渲染」状态；它的自有 hole `enhanced-workspace.workspace.directoryFlow`
+保持同一 flowOwner 契约。所以组合了 enhanced-workspace 的 profile 必须把侧栏
+注册切到新 key（hero 侧不受遮蔽，恒用官方 key `conversation.hero.workspace.
+directoryFlow`）。装/卸 enhanced-workspace 因此自动跟随——无需构建期标志、无需 env。
+
+**全链路与涉及文件**：
+
+```
+cordis.patch.yml（bundle 层 patch，config: !!js 扫描 composed patch stack）
+   → lib/index.js effectiveSlot（优先级链 ①→④）
+   → GET /dsh-remote/slot-config（返回 { slot, source }）
+   → lib/client.js fetchSidebarDirectoryFlowSlot()（3s 超时）→ DirPicker 侧栏注册；
+     读取失败/未设置 → 官方 key 兜底
+```
+
+- 仓库根 `cordis.patch.yml` —— 决定 key 的 bundle 层配置本体（本机制入口）。
+- `lib/index.js` —— schema `sidebarDirectoryFlowSlot`（默认 `''`）、常量
+  `SIDEBAR_DIRECTORY_FLOW_SLOT_OFFICIAL/_ENHANCED`、`effectiveSlot` 优先级链、
+  `/dsh-remote/slot-config` 路由。
+- `lib/client.js` —— 浏览器 half 消费端（`apply` 内异步取 key 后再声明侧栏注册）。
+- `scripts/build.mjs` / `scripts/sync-profile.sh` —— 构建/接线**不烘焙 key**
+  （产物逐字节等价），只回显诊断：宿主在跑时 curl 配置端点看实际值，不在跑时
+  按 profile 依赖静态预期提示。
+- README(.zh).md —— 用户侧说明 + 静态覆盖示例。
+
+> 改 key 相关逻辑的验证点：宿主跑起来后
+> `curl http://127.0.0.1:<port>/dsh-remote/slot-config` 看 `source`（config /
+> patch / probe / default）；或直接跑 `./scripts/sync-profile.sh` 看槽位回显。
+
+## 5. 与 `scripts/dev-run.sh` 沙箱的关系
 
 - `dev-run.sh` 绑定 **DSH Desktop 应用包**（顶部 `APP` 常量 → `…/dsh-desktop/dist/…/app/node_modules/@deepseek-ai/dsh/lib/bin.js` + `dsh-desktop.patch.yml`）。本机没有 Desktop 应用（mise/源码形态），所以 `--restart` 报「未找到桌面版 harness 入口」。
 - 产品动态更新链路（本文 §0–§2）已覆盖同样目的：改源码 → build.mjs → 运行实例热更新，**不需要沙箱**。
 - 若仍要恢复沙箱：把 `require_app()` 的解析改为来源回退 —— `NODE=$(command -v node)`、`BIN=$PROD_HOME/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`、`PATCH=$PROD_HOME/profiles/$PROFILE/cordis.patch.yml`（PROD_HOME 已由 DSH_HOME 推导）。注意沙箱 `build_profile()` 的 `cp -al` 硬链接语义在新形态（link 部署）下会把 symlink 原样拷过去，`sync_lib` 的 `rm -rf "$INSTALL_DIR/lib"` 在 symlink 安装上是「删源文件」危险操作——恢复前先确认安装形态。
 
-## 5. 常见问题
+## 6. 常见问题
 
 | 症状 | 原因 | 处理 |
 |---|---|---|

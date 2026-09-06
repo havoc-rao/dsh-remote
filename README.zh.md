@@ -90,20 +90,20 @@ dsh plugin add dsh-remote            # 添加 bundle
 改为可选，不再是依赖，也不会被自动挂载。这样 SSH 工具和设置页不再被某个侧边栏
 实现的版本/API 变化拖垮。
 
-如需 Web 版远程文件浏览/编辑，请显式安装两个 bundle：
+> **远程会话下的侧栏文件面板（v0.8.12+）**：当侧边栏为 **v0.18.0+** 时，Files
+> 面板的文件树呈现**两个起点**——本地起点（会话 cwd，本地语义、搜索/上传/git 等
+> 能力全部保留）+ 远程起点（dsh-remote 经 `fileTreeSource` slot 的 `roots` 注入，
+> label 为远程工作区名，展开浏览直接走 `/dsh-remote/ls`）；远程起点的本地能力
+> （上传/下载/git/open-with/search）按 slot 契约降级关闭（缺省 off），本地起点
+> 永不被接管。侧边栏 v0.17 或该 slot 缺失时自动回退：v0.17 下为整树远程接管，
+> 更旧版本保持在本地源——树始终可用。
 
-```bash
-dsh plugin add dsh-remote
-dsh plugin add dsh-better-sidebar
-```
-
-独立侧边栏 service 存在时，`dsh-remote` 会动态发现它并注册远程文件 tab；
-不安装时，`rw_*` 工具、设置页、同步、审计日志和端口转发均照常工作。
-官方 Desktop 使用原生右侧栏，不需要安装 `dsh-better-sidebar`。
-
-> **从 0.7.2–0.8.17 升级：** 升到 0.8.18 后，内嵌侧边栏依赖和挂载会消失。
-> 只有仍需要 Web 侧边栏 UI 时才单独安装 `dsh-better-sidebar`。旧 profile 里针对
-> `id: dsh-remote-sidebar` 的覆盖可以删除，因为这行已不存在。
+> **要求 profile 的 pnpm linker 为 `hoisted`**（DSH profile 默认，
+> `pnpm-workspace.yaml` 里 `nodeLinker: hoisted`）。loader 从 profile 根解析
+> 插件包，侧边栏必须能在顶层 `node_modules` 被解析到。如果你的
+> `pnpm-workspace.yaml` 被重写丢掉了 `nodeLinker: hoisted`，请补回并执行一次
+> `pnpm install` —— 否则内嵌侧边栏行会报
+> `Cannot find package 'dsh-better-sidebar'`。
 
 （或 `npm install dsh-remote`，再在 `cordis.patch.yml` 加 `- id: dsh-remote / name: dsh-remote`。）
 
