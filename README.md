@@ -118,11 +118,18 @@ implementation.
 > roots (local + remote) in one tree, v0.17 takes over the whole tree
 > remote-side, even older keep the 🌐 remote-file tab — the tree always
 > works.
+>
+> **@-reference on remote rows (sidebar v0.21.0+)**: the remote tree's
+> @-reference pill inserts the row's **local mirror path** (the session cwd
+> + the path's relative segment under the remote root) instead of the raw
+> remote absolute path, so the composer can resolve the referenced file.
+> Older sidebars skip the mapping and insert the path verbatim — unchanged
+> behavior.
 
 > **Upgrading from ≤0.8.6 with a standalone sidebar?** You may keep the
 > standalone `dsh-better-sidebar` bundle (any order) — 0.8.7+ no longer
 > crashes. Or remove it from `bundles` and let dsh-remote mount the embedded
-> copy (version ^0.14.0).
+> copy (version ^0.21.0).
 
 ```bash
 dsh plugin add dsh-remote
