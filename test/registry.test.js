@@ -1,6 +1,8 @@
 // Registry semantics for issue #13: "Saved Connections != Active Remote
 // Context". A saved machine must never silently become the active remote
 // context; `currentId` is an explicit user choice and nothing else.
+// Per-workspace isolation: the ACTIVE context is stored per workspace dir in
+// `workspaces`, never as one app-wide activation.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,9 +15,9 @@ const tmp = () => mkdtempSync(path.join(tmpdir(), 'dsh-remote-reg-'))
 const file = (dir) => path.join(dir, 'machines.json')
 const machine = (id, host) => ({ id, name: host, host, port: 22, username: 'root', password: 'secret', workspace: '/home/root/proj', proxy: { host: 'jump', password: 'pp' } })
 
-test('loadMachines: empty / missing file → { list: [], currentId: null }', () => {
+test('loadMachines: empty / missing file → { list: [], currentId: null, explicitNone: false, workspaces: {} }', () => {
   const d = tmp()
-  assert.deepEqual(loadMachines(file(d)), { list: [], currentId: null, explicitNone: false })
+  assert.deepEqual(loadMachines(file(d)), { list: [], currentId: null, explicitNone: false, workspaces: {} })
   rmSync(d, { recursive: true, force: true })
 })
 
@@ -118,4 +120,63 @@ test('machineId mints unique ids', () => {
   const b = machineId()
   assert.match(a, /^m-/)
   assert.notEqual(a, b)
+})
+
+// ── per-workspace selections (workspaces map) ────────────────────────────────
+
+test('loadMachines: workspaces survive a round-trip (per-workspace isolation)', () => {
+  const d = tmp()
+  const f = file(d)
+  saveMachines(f, [machine('a', 'h1'), machine('b', 'h2')], null, true, {
+    '/Users/u/proj-local': { machineId: 'b', workspace: '/data/workspace/proj', explicitNone: false },
+    '/Users/u/proj-off': { machineId: '', workspace: '', explicitNone: true },
+  })
+  const loaded = loadMachines(f)
+  assert.deepEqual(loaded.workspaces, {
+    '/Users/u/proj-local': { machineId: 'b', workspace: '/data/workspace/proj', explicitNone: false },
+    '/Users/u/proj-off': { machineId: '', workspace: '', explicitNone: true },
+  })
+  rmSync(d, { recursive: true, force: true })
+})
+
+test('loadMachines: stale workspace machineId (deleted machine) never re-activates a ghost — entry dropped (explicit none kept)', () => {
+  const d = tmp()
+  const f = file(d)
+  saveMachines(f, [machine('a', 'h1'), machine('ghost', 'h9')], null, true, {
+    '/Users/u/proj-ghost': { machineId: 'ghost', workspace: '/data/x', explicitNone: false },
+    '/Users/u/proj-still-off': { machineId: 'ghost', workspace: '', explicitNone: true },
+    '/Users/u/proj-ok': { machineId: 'a', workspace: '/data/ok', explicitNone: false },
+  })
+  // Delete the ghost machine (regression target: deleting a machine must also
+  // purge / neutralize every workspace selection pointing at it).
+  const kept = loadMachines(f).list.filter((m) => m.id !== 'ghost')
+  saveMachines(f, kept, null, false)
+  const ws = loadMachines(f).workspaces
+  assert.deepEqual(ws, {
+    '/Users/u/proj-still-off': { machineId: '', workspace: '', explicitNone: true },
+    '/Users/u/proj-ok': { machineId: 'a', workspace: '/data/ok', explicitNone: false },
+  })
+  rmSync(d, { recursive: true, force: true })
+})
+
+test('saveMachines without a workspaces arg preserves the stored map (machine add must not drop selections)', () => {
+  const d = tmp()
+  const f = file(d)
+  saveMachines(f, [machine('a', 'h1')], null, true, { '/Users/u/proj-a': { machineId: 'a', workspace: '/data/a', explicitNone: false } })
+  // Adding machine 'b' with keepCurrentKey:false and NO workspaces argument:
+  // the map written earlier must survive byte-for-byte.
+  saveMachines(f, [machine('a', 'h1'), machine('b', 'h2')], null, false)
+  const loaded = loadMachines(f)
+  assert.equal(loaded.list.length, 2)
+  assert.deepEqual(loaded.workspaces, { '/Users/u/proj-a': { machineId: 'a', workspace: '/data/a', explicitNone: false } })
+  rmSync(d, { recursive: true, force: true })
+})
+
+test('loadMachines: normalizes and drops empty workspace entries', () => {
+  const d = tmp()
+  const f = file(d)
+  writeFileSync(f, JSON.stringify({ list: [machine('a', 'h1')], workspaces: { '/u/x': {}, '/u/y': null, '/u/z': { machineId: 'a', workspace: 42, explicitNone: false } } }))
+  const loaded = loadMachines(f)
+  assert.deepEqual(loaded.workspaces, { '/u/z': { machineId: 'a', workspace: '', explicitNone: false } })
+  rmSync(d, { recursive: true, force: true })
 })

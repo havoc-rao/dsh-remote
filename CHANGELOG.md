@@ -3,6 +3,76 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 重构：远程上下文「按工作区隔离」（store 不再全局泄漏）
+
+- **问题**：`machines.json` 的 `currentId`（上次“设为当前”的机器）与机器保存的
+  `workspace` 是**整个 profile 一份的全局状态**，且插件启动会“自动恢复”最后那台机器
+  并把它的远程工作区灌进共享 pool（`421019a` 的 auto-restore）。后果：在**纯本地项目**
+  工作区里也能用远程逻辑，却连到**另一个远程项目**（wxa-agent-dashboard@any17 case）——
+  rw_* / 终端 / 远端文件落点全部指向别的项目。
+- **语义（issue #13 贯彻到底 + 按工作区）**：
+  - 机器列表仍是全局“保存的机器”（standby）；**激活态改按本地工作区目录**存
+    `machines.json#workspaces: { <cwd>: { machineId, workspace, explicitNone } }`；
+  - 会话 cwd 在某个镜像目录下 → 该会话的远程机器 = **镜像归属机器**（meta 里的
+    host/user/port），远程工作区 = `meta.remotePath`，与全局 currentId 无关；
+  - 纯本地 cwd → 只有该工作区自己显式选择/连接过才有远程；否则 rw_* 明确报
+    “本工作区没有远程绑定”，**绝不落到别的项目的机器**；
+  - **删除开机全局 auto-restore**（泄漏源头）；`store.currentId` 退化为遗留信息字段，
+    不再驱动任何激活。
+- **rw_* 工具**：全部改为 `execute(args, exec)`，按 `exec.agent.session.header.cwd`
+  解析调用方工作区，用该工作区机器的**独立 per-machine pool**（复用 routePools 缓存），
+  同一进程多会话/多工作区不再共享一个被反复 retarget 的池。
+- **终端**：WS 握手新增 `machine=<registry id>`；TerminalManager 支持 per-session
+  pool（getPool），每个终端会话在**它所属工作区机器**的专用连接上开 pty。
+- **HTTP/UI**：`/status`（支持 `?sessionId=`/`?cwd=`）返回工作区级上下文；
+  `/current` 变为按 `workspace` 绑定（无全局“设为当前”）；`/workspace`、`/mirror`
+  按工作区 + 可选 `machine` 落库与建镜像；`/ls`、`/home` 支持 `?machine=` 让工作区
+  picker 浏览未建镜像的机器；fs download 落到路径所属机器的镜像。
+- **提示词 / 斜杠命令**：按会话 cwd 取镜像归属机器显示；本地会话注入安静（不报别的
+  项目的机器）。设置页新增「作用工作区」说明与按工作区“设为当前/清除”。
+- 兼容：旧文件无 `workspaces` 键正常读取；指向已删机器的选择加载时清除/降级
+  （含 delete 机器时同步清理）；单测 `test/registry.test.js` 新增 per-workspace
+  round-trip / stale-id / preserve 覆盖。
+### 新增：`@remote:` / `@local:` 引用协议 —— 文件归属不再歧义
+
+- **问题**：一个文件可能存在于远程、也可能真的在本机，裸路径对模型天然歧义；之前
+  侧边栏远程树的 @引用胶囊把**本地镜像路径**插入输入框——镜像未同步时模型本地读取
+  失败，又回到「先试错本地、再转远程」的死循环。
+- **协议**（宿主注入 prompt 与客户端拼写严格一致，`client.js` `REF_REMOTE` /
+  `REF_LOCAL` ↔ `index.js` 注入段）：
+  - `@remote:/path` —— **远程主机上的文件**（只存在于 host）：只用 `rw_read_file` /
+    `rw_stat` / `rw_search` / `rw_exec` 读取，禁止本地工具；
+  - `@local:/path`（或落在本地镜像下的无标记路径）—— **本机文件**：原生本地工具
+    （read / glob / grep）；
+  - 无标记的绝对路径（`/data/…`、`C:\…`）按远程处理（PATH RULES 兜底，向后兼容
+    用户手贴的裸路径）。
+- **客户端**：v0.19 render-tree 的 @pill 与 v0.21 `source.reference()` 都改为插入
+  `@remote:<远程路径>`（根行收到的是本地镜像 cwd，反向映射回远程根再打标）；胶囊
+  文案 `@文件`/`@file` → `@remote`。剪贴板「复制相对/绝对地址」保持裸路径不变
+  （用户自由粘贴，由 PATH RULES 覆盖）。
+- **宿主**：注入段落新增 `REFERENCES (@ protocol)` 段，给出三态判定与例子。
+- 单元测试：`test/prompt.test.js` 断言协议三态与例子（`@remote:<root>/restart.sh`）。
+
+### 优化：远程 session 的 system-prompt 注入 —— 显式「路径归属」规则，杜绝本地先试错
+
+- **问题**：注入段落之前只写了一句「用 rw_* 工具检查远程文件」，模型仍会把用户提到的
+  远程绝对路径（如 `/data/workspace/…`）当成本地路径，先用 read/glob/grep 做本地查询、
+  失败后才转远程工具（wxa-agent-dashboard case：查 `/data/workspace/.../restart.sh` 先
+  翻本地镜像）。
+- **注入段落实例化**（仅远程 session，issue #13 判定不变）：
+  - 点名「真实项目文件在 REMOTE 主机上」+ 本地镜像目录（session workspace 是远程树的
+    缓存快照，可能缺失/过期）；
+  - **路径归属规则**：用户提到的绝对路径（`/data/…`、`/home/…`、`/root/…`、`/c/…`、
+    `C:\…`）都是**远程路径**，禁止用本地文件工具（read/glob/grep/bash ls/cat）查询——
+    这些尝试必然失败、**不构成文件不存在的证据**；
+  - 远程路径直接走 `rw_list_dir` / `rw_stat` / `rw_read_file` / `rw_search` /
+    `rw_exec` / `rw_write_file` / `rw_edit` / `rw_append` / `rw_sync` / `rw_push` /
+    `rw_download` / `rw_upload`；
+  - 给出映射与确认纪律：远程 `<root>/<x>` ↔ 本地 `<mirror>/<x>`（sync 后才有），
+    权威内容先 `rw_read_file` / `rw_stat` 在主机上确认。
+- 单元测试：`test/prompt.test.js`（4 例：远程 session 注入路径规则 / 本地 session 不注入
+  （issue #13 回归）/ 无 cwd 静默 / forwards 行只在有转发时出现）。
+
 ### 新增：远程终端 —— 复用 better-sidebar TerminalView 的 transport slot
 
 - **交互式远程 shell（「🖥 远程终端」tab）**：`rw_exec` 之外补齐“远程终端控制”
