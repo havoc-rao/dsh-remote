@@ -14,3 +14,4 @@ pnpm-workspace.yaml
 
 # npm cache workaround artifacts
 .npm-cache/
+.dsh/

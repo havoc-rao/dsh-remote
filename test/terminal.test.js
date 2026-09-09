@@ -255,3 +255,21 @@ test('closeAll tears every session down', async () => {
   tm.closeAll()
   assert.equal(tm.sessions.size, 0)
 })
+test('resume and sid cannot attach a shell from another workspace or machine', async () => {
+  const { tm } = makeManager()
+  const original = new FakeWs()
+  tm.attach(original, { resume: 'shared-tab', scope: '/mirror/a' })
+  await tick()
+  const sid = [...tm.sessions.keys()][0]
+  for (const params of [
+    { resume: 'shared-tab', scope: '/mirror/b' },
+    { sid, scope: '/mirror/b' },
+    { sid, scope: '/mirror/a', machine: 'other-machine' },
+  ]) {
+    const socket = new FakeWs()
+    tm.attach(socket, params)
+    assert.ok(socket.closed, 'cross-workspace attach refused')
+    assert.equal(tm.sessions.get(sid).ws, original, 'original shell retains its socket')
+  }
+  tm.closeAll()
+})
