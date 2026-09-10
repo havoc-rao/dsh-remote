@@ -3,6 +3,21 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 移除：独立「🖥 远程终端」标签页（冗余——默认终端 tab 已接管远程会话）
+
+- **问题**：自建「🖥 远程终端」tab（`SIDEBAR_TERMINAL_ID` / `RemoteTerminalPane`）
+  与 terminal-source 槽位的默认终端接管（`registerRemoteTerminalProvider`，远程会话
+  里「+」菜单的普通「终端」tab 直接走远程 SSH transport）功能重叠；此前已用
+  `available` 谓词在远程会话隐藏该入口，实现本身仍冗余。
+- **移除**（浏览器半）：`registerTab` 的 🖥 终端 tab 注册、`RemoteTerminalPane`
+  组件与 `resolveBetterSidebarModules` 懒加载、`terminal.tabTitle/loading/loadFail/
+  connecting` 与 `settings.terminal*` 文案、设置页「远程终端（交互式 SSH shell）」
+  面板及其 `/dsh-remote/terminal/status` 轮询。
+- **移除**（宿主半）：`GET /dsh-remote/terminal/status` 路由与 `TerminalManager.list()`。
+- **保留**：`registerRemoteTerminalProvider`（默认终端 tab 远程接管）、
+  `/dsh-remote/ws/terminal` 通道、`terminalMaxSessions` / `terminalReconnectGraceMs`
+  配置（`lib/terminal.js` 直接消费）。
+
 ### 新增：远程 git 数据源——远程会话的 Git 面板 / explorer 装饰 / diff 标签页全部读写远端仓库
 
 - **问题**：远程会话的 cwd 是**本地镜像**，宿主 `git.status` 对镜像运行 git——镜像多数

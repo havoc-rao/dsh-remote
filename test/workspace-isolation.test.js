@@ -58,10 +58,17 @@ test('client selects current session, not first list entry; terminal gate enable
   assert.equal(ctx.scopeCwdGuess(), '/local/project')
   delete list.current
   assert.equal(ctx.scopeCwdGuess(), '')
-  const available = client.match(/available: (\(_ctx, scope\) => [^\n]+),/)[1]
-  const gate = vm.runInContext(available, ctx)
-  assert.equal(gate(null, { cwd: '/mirrors/a/project/src' }), true)
-  for (const cwd of ['/local/project', '/mirrors', '/mirrors/a', '/mirrors/a/project-other', undefined]) assert.equal(gate(null, { cwd }), false)
+  // The 🖥 remote-terminal tab is gone — the terminal-source provider's
+  // `match` is the gate that hands the DEFAULT terminal tab the remote
+  // transport in this session (mirror semantics + agent/gb exclusions).
+  const provStart = client.indexOf('    function registerRemoteTerminalProvider(')
+  const matchStart = client.indexOf('const match = (sessionId, cwd, tabId) => {', provStart)
+  const matchEnd = client.indexOf('\n      }', matchStart) + 8
+  const gate = vm.runInContext(client.slice(matchStart + 'const match = '.length, matchEnd), ctx)
+  assert.equal(gate(null, '/mirrors/a/project/src', 'terminal:x'), true)
+  assert.equal(gate(null, '/mirrors/a/project/src', 'agent:x'), false)
+  assert.equal(gate(null, '/mirrors/a/project/src', 'gb:x'), false)
+  for (const cwd of ['/local/project', '/mirrors', '/mirrors/a', '/mirrors/a/project-other', undefined]) assert.equal(gate(null, cwd, 'terminal:x'), false)
 })
 
 test('status and mirror resolution agree for local, live remote, historical and unknown sessions', async (t) => {
