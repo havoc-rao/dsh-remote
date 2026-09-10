@@ -129,7 +129,15 @@ implementation.
 > **Upgrading from ≤0.8.6 with a standalone sidebar?** You may keep the
 > standalone `dsh-better-sidebar` bundle (any order) — 0.8.7+ no longer
 > crashes. Or remove it from `bundles` and let dsh-remote mount the embedded
-> copy (version ^0.21.0).
+> copy (version ^0.23.0).
+
+> **Remote git panel (sidebar v0.23.0+)**: with a sidebar **v0.23.0+**, the
+> Git panel, the explorer's git-status decorations and the diff tabs of
+> remote sessions are fed by the **remote repository** through the
+> `gitSource` slot — every operation (status / history / stage / commit /
+> checkout / fetch / discard / revert / cherry-pick) runs as a `git -C …`
+> command on the remote host, byte-compatible with the local surfaces.
+> Older sidebars keep their own local git routes unchanged.
 
 ```bash
 dsh plugin add dsh-remote

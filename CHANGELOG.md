@@ -3,6 +3,37 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 新增：远程 git 数据源——远程会话的 Git 面板 / explorer 装饰 / diff 标签页全部读写远端仓库
+
+- **问题**：远程会话的 cwd 是**本地镜像**，宿主 `git.status` 对镜像运行 git——镜像多数
+  不含 `.git`（或过期），Git 面板停在「不是仓库」占位，explorer 树装饰也拿不到远端仓库
+  状态，diff 标签页无 diff 可看。**现状**：镜像不含 `.git` 时嵌入副本直接消费宿主本地
+  git 路由，逐字节维持旧行为。
+- **实现**：消费 dsh-better-sidebar **v0.23.0** 的 `gitSource` 槽位（feature
+  `'gitSource'`，旧宿主双向兼容不强注册）：
+  - **浏览器半**（`lib/client.js`）：`registerRemoteGitProvider` 按
+    `(sessionId, cwd)` 镜像归属判定接管会话（`sessionIsRemote` 同款语义，first match
+    wins）；`makeRemoteGitSource` 按 (sessionId, cwd) memo 返回稳定 source，15 个方法
+    与宿主 `api.git*` 同签名——`gitStatus` / `gitWorktrees` / `gitBranch` /
+    `gitBranchStatus` / `gitBranchTips` / `gitLogGraph` / `gitDiff` /
+    `gitCommitDiff` / `gitStage` / `gitUnstage` / `gitCommit` / `gitCheckout` /
+    `gitFetch` / `gitDiscard` / `gitRevert` / `gitCherryPick`（无本地会话、无 provider
+    匹配一律保持宿主路由逐字节不变；`subscribe` 不做，宿主 2s 轮询兜底）；
+  - **宿主半**（`lib/index.js`）：新增 `POST /dsh-remote/git`——每个方法 = 远端主机上
+    一条 `git -C <dir> …` 命令（routePoolOf 按路径归属机器、复用既有 exec 管线与
+    shq 引号；`gitRun` 统一 `--no-pager -c color.ui=false` + `GIT_OPTIONAL_LOCKS=0`）；
+    容器工作区（cwd 不是仓库时）自动发现直接子仓库（有界并发 + 60s TTL 缓存）；
+    porcelain 解析全部为纯函数放新模块 `lib/git-parse.js`（`-b` 分支头 / worktree
+    porcelain / log-graph 行 / for-each-ref 对 / left-right 计数 / 脏行计数）；
+  - **装饰门**：远端树数据源 descriptor 声明 `capabilities: { git: true }`
+    （registerFileTreeProvider 与 fileTreeSectionSource 两种形态都补）——provider
+    会话的装饰数据来自本 git provider，root 为远端绝对路径、与树行同命名空间；
+  - 依赖 `dsh-better-sidebar` ^0.21.0 → **^0.23.0**；`/dsh-remote/git` 失败响应带
+    `credential` 分类标记（与 ls/read/write/fs 一致）；
+  - 顺带修复（宿主半）：`machinePoolOf` 的 per-machine 路由池漏传
+    `maxOutputChars`，`truncate(_, undefined)` 会把池上全部 exec 输出截成
+    「truncated: NaN more chars」（此前路由池只跑 `echo ok` 类探测被掩盖；
+    git 路由依赖输出，一并暴露）——现随 `commandTimeoutMs` 一起传入。
 ### 新增：远程连接「刷新 / 重新建立连接」——连接掉线一键恢复
 
 - **问题**：SSH 连接掉线（空闲超时 / 网络抖动 / 远端重启）后，远程目录树报

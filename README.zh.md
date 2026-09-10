@@ -149,6 +149,12 @@ dsh plugin add dsh-remote            # 添加 bundle
 > - 无标记的绝对路径（`/data/…`、`C:\…`）按远程处理（见上方路径规则）。
 > 侧边栏远程树的 **@引用胶囊按 `@remote:` 形式插入**（v0.21+ 主机走
 > `source.reference()` 映射，旧版主机原样插入远程路径，同样按远程处理）。
+>
+> **远程 Git 面板（侧边栏 v0.23.0+）**：侧边栏为 **v0.23.0+** 时，远程会话的
+> Git 面板、explorer 的 git 状态装饰与 diff 标签页全部由**远端仓库**供数
+> （`gitSource` 槽位）——状态 / 历史 / stage / commit / checkout / fetch /
+> discard / revert / cherry-pick 每一步都是远端主机上的 `git -C …` 命令，
+> 与本地表面逐字节兼容；旧版侧边栏保持自己的本地 git 路由不变。
 
 ## 可选：CLI 默认机
 
