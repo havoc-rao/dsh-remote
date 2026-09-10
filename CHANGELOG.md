@@ -28,7 +28,14 @@ All notable changes to **dsh-remote**.
   - **装饰门**：远端树数据源 descriptor 声明 `capabilities: { git: true }`
     （registerFileTreeProvider 与 fileTreeSectionSource 两种形态都补）——provider
     会话的装饰数据来自本 git provider，root 为远端绝对路径、与树行同命名空间；
-  - 依赖 `dsh-better-sidebar` ^0.21.0 → **^0.23.0**；`/dsh-remote/git` 失败响应带
+  - **依赖**：`dsh-better-sidebar` 规格定为 **^0.17.1**。原任务要求改为 ^0.23.0，
+  但 0.21.0 / 0.23.0 **从未发布 npm**（npm 最高 0.19.0，且 0.18+ 的
+  peerDependencies 指向 @deepseek-ai/dsh-* 的 rc 预发布版本，pnpm 安装解析器
+  range 归一化后不可满足 → `[ERR_PNPM_NO_MATCHING_VERSION]` 卡死；0.17.1 是
+  依赖树可全新安装的最新版本）。**运行时不依赖此规格**：DSH profile 以 `link:`
+  直挂宿主仓库（~/.dsh/profiles/web/package.json），gitSource / terminalSource
+  等新槽位照常生效；宿主侧发布一个依赖树干净的版本后此规格可回升）；
+  `/dsh-remote/git` 失败响应带
     `credential` 分类标记（与 ls/read/write/fs 一致）；
   - 顺带修复（宿主半）：`machinePoolOf` 的 per-machine 路由池漏传
     `maxOutputChars`，`truncate(_, undefined)` 会把池上全部 exec 输出截成

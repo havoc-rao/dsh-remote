@@ -129,7 +129,9 @@ implementation.
 > **Upgrading from ≤0.8.6 with a standalone sidebar?** You may keep the
 > standalone `dsh-better-sidebar` bundle (any order) — 0.8.7+ no longer
 > crashes. Or remove it from `bundles` and let dsh-remote mount the embedded
-> copy (version ^0.23.0).
+> copy (version ^0.17.1 — the newest npm release whose dependency tree
+> installs; the runtime profile provides newer slots through its own
+> sidebar link).
 
 > **Remote git panel (sidebar v0.23.0+)**: with a sidebar **v0.23.0+**, the
 > Git panel, the explorer's git-status decorations and the diff tabs of
