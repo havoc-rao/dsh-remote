@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import {
   parseStatusV1, parseBranchHeader, parseWorktreeList, parseLogGraphLines,
   parseForEachRefPairs, parseLeftRightCount, countStatusLines,
+  parseHeaderSync, buildWorkspaceMarker,
 } from '../lib/git-parse.js'
 
 test('parseStatusV1: plain branch + entries (porcelain v1 -z -b)', () => {
@@ -143,6 +144,79 @@ test('parseLeftRightCount: tab and space separators, garbage → 0/0', () => {
   assert.deepEqual(parseLeftRightCount('\n12\t4\n'), [12, 4])
   assert.deepEqual(parseLeftRightCount(''), [0, 0])
   assert.deepEqual(parseLeftRightCount('fatal: not a revision'), [0, 0])
+})
+
+test('parseStatusV1: raw -b header body is captured for the marker builders', () => {
+  const { header, branch } = parseStatusV1('## main...origin/main [ahead 12]\0 M lib/client.js\0')
+  assert.equal(branch, 'main')
+  assert.equal(header, 'main...origin/main [ahead 12]')
+  assert.equal(parseStatusV1('## HEAD (no branch)\0').header, 'HEAD (no branch)')
+  assert.equal(parseStatusV1('\0 M a\0').header, '')
+})
+
+test('parseHeaderSync: REAL fixture — ahead-only header from a live repo', () => {
+  // Captured verbatim from `git status --porcelain=v1 -b` on this repo:
+  // 12 local commits ahead of origin/main, working tree modified.
+  assert.deepEqual(parseHeaderSync('main...origin/main [ahead 12]'), {
+    branch: 'main', upstream: 'origin/main', ahead: 12, behind: 0,
+  })
+})
+
+test('parseHeaderSync: every porcelain -b body shape', () => {
+  assert.deepEqual(parseHeaderSync('main'), { branch: 'main', ahead: 0, behind: 0 })
+  assert.deepEqual(parseHeaderSync('feat/x...origin/feat/x'), {
+    branch: 'feat/x', upstream: 'origin/feat/x', ahead: 0, behind: 0,
+  })
+  assert.deepEqual(parseHeaderSync('main...origin/main [behind 2]'), {
+    branch: 'main', upstream: 'origin/main', ahead: 0, behind: 2,
+  })
+  assert.deepEqual(parseHeaderSync('main...origin/main [ahead 1, behind 2]'), {
+    branch: 'main', upstream: 'origin/main', ahead: 1, behind: 2,
+  })
+  // Upstream configured but its tracking ref no longer exists locally.
+  assert.deepEqual(parseHeaderSync('feat/gone...origin/feat/gone [gone]'), {
+    branch: 'feat/gone', upstream: 'origin/feat/gone', ahead: 0, behind: 0, gone: true,
+  })
+  // Detached HEAD and unborn branches keep the established spellings.
+  assert.deepEqual(parseHeaderSync('HEAD (no branch)'), { branch: 'HEAD', ahead: 0, behind: 0 })
+  assert.deepEqual(parseHeaderSync('No commits yet on dev'), { branch: 'dev', ahead: 0, behind: 0 })
+  assert.deepEqual(parseHeaderSync('Initial commit on feat/x'), { branch: 'feat/x', ahead: 0, behind: 0 })
+})
+
+test('buildWorkspaceMarker: REAL status snapshot → marker shape', () => {
+  // The actual `-z -b` output of this repo right now (see the fixture note
+  // above): 3 modified tracked files, all unstaged, 12 ahead.
+  const { header, entries } = parseStatusV1(
+    '## main...origin/main [ahead 12]\0 M lib/client.js\0 M lib/git-parse.js\0 M lib/index.js\0',
+  )
+  const marker = buildWorkspaceMarker({ header, entries, branch: 'main' }, '/repo')
+  assert.deepEqual(marker, {
+    isRepo: true,
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 12,
+    behind: 0,
+    dirty: 3,
+    staged: 0,
+    root: '/repo',
+  })
+})
+
+test('buildWorkspaceMarker: staged/untracked split and detached/unborn pass-through', () => {
+  const status = parseStatusV1('## feat/x\0M  staged.txt\0 M unstaged.txt\0?? new.txt\0A  added.txt\0 D deleted.txt\0')
+  const marker = buildWorkspaceMarker(status, '/r')
+  assert.equal(marker.dirty, 5)
+  // Index column: 'M ', 'A ' are staged; ' M' and ' D' not; '??' never.
+  assert.equal(marker.staged, 2)
+  assert.equal(marker.branch, 'feat/x')
+  assert.equal(marker.upstream, undefined)
+  const unborn = buildWorkspaceMarker(parseStatusV1('## No commits yet on dev\0'), '/r')
+  assert.equal(unborn.branch, 'dev')
+  assert.equal(unborn.dirty, 0)
+  const detached = buildWorkspaceMarker(parseStatusV1('## HEAD (no branch)\0'), '/r')
+  assert.equal(detached.branch, 'HEAD')
+  // No -b header (unparseable/empty output) → not a repo snapshot.
+  assert.equal(buildWorkspaceMarker(parseStatusV1(''), '/r'), null)
 })
 
 test('countStatusLines: non-empty porcelain rows only', () => {

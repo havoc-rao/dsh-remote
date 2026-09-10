@@ -152,10 +152,27 @@ dynamically and registers its remote explorer/editor tabs. Without it, all
 work. Official Desktop uses its native right-sidebar seats and does not need
 `dsh-better-sidebar`.
 
+> **Remote workspace git markers**: mirror workspaces
+> (`$DSH_HOME/remote-workspaces/…`, whose local copy has no `.git`) get
+> their branch marker **from dsh-remote itself** — the explorer's "Remote
+> workspace" footer line and the "Recent workspaces" rows of the settings
+> page and the picker show a `⎇ branch` badge (hover reveals ahead / behind;
+> no dirty count on purpose). The data is one remote
+> `git status --porcelain -b` per workspace (`GET /dsh-remote/git-workspace`,
+> 5s cache); no sidebar version requirement.
+
 > **Upgrading from 0.7.2–0.8.17:** upgrading to 0.8.18 removes the embedded
 > sidebar dependency and mount. Install `dsh-better-sidebar` separately only if
 > you still want that Web UI. Any old profile override for
 > `id: dsh-remote-sidebar` can be removed because that row no longer exists.
+
+> **Requires the profile's pnpm linker to be `hoisted`** (the DSH profile
+> default, `nodeLinker: hoisted` in `pnpm-workspace.yaml`). The loader resolves
+> plugin packages from the profile root, so the sidebar must be reachable in
+> the top-level `node_modules`. If your `pnpm-workspace.yaml` was rewritten
+> without `nodeLinker: hoisted`, add it back (`nodeLinker: hoisted`) and run
+> `pnpm install` once — otherwise the embedded sidebar row fails with
+> `Cannot find package 'dsh-better-sidebar'`.
 
 (or `npm install dsh-remote` + add `- id: dsh-remote / name: dsh-remote` in `cordis.patch.yml`).
 

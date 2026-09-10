@@ -3,6 +3,35 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 新增：远程工作区 git 标记——工作区级分支 / 脏状态，经远端主机取数并显示在工作区行上
+
+- **问题**：上一轮的 gitSource 数据源覆盖的是**会话级** git 表面（GitView / explorer
+  装饰 / diff），针对的输入是「会话 cwd = 本地镜像」；但**工作区级**的 git 状态
+  （工作区行的分支 / 脏状态标记，如 `~/.dsh/remote-workspaces/<host>-<user>-<port>/
+  <base>` 这种远程镜像工作区）仍没有数据源——消费方（工作区浏览器等）只做本地
+  `.git` 上行 walk，而镜像同步默认忽略 `.git/`，于是远程工作区恒落「无 git」形态
+  （无标记 / 「未检测到 git 仓库」）。
+- **实现**：
+  - **宿主半**（`lib/index.js`）：新增 `GET /dsh-remote/git-workspace`——一个工作区的
+    完整 git 标记：分支（或分离头短 sha）、dirty/staged 计数、upstream ahead/behind。
+    两种寻址：`?local=<本地镜像路径>`（镜像 meta → 属主机器 + 远端目录，非镜像本地
+    路径返回 `marker: null`）与 `?path=<远端目录>&machine=<机器 id>`（设置页 / 选择器
+    列某台机器的最近工作区时显式指定机器，绝不走 shared pool）。数据 = 远端一条
+    `git status --porcelain=v1 -z -b`（分离头时补一条 `rev-parse --short HEAD`），
+    porcelain 解析复用 `lib/git-parse.js`；非仓库 → `isRepo:false`（非错误）；按
+    (机器, 目录) 5s TTL 缓存（上限 128 条，`?refresh=1` 可绕过）；传输/凭据失败带
+    `credential` 分类（与 ls/read/git 一致）。
+  - **库**（`lib/git-parse.js`）：`parseStatusV1` 增加原始 `-b` 头 body 返回；
+    新增 `parseHeaderSync`（`branch...upstream [ahead N, behind M]` / `[gone]` /
+    分离头 / unborn 全形态）与 `buildWorkspaceMarker`（dirty/staged 计数 + 同步状态
+    → 标记 JSON，纯函数）。
+  - **浏览器半**（`lib/client.js`）：`WorkspaceGitMarkerChip`（行级 badge：`⎇ 分支` +
+    脏计数徽标，title 含 staged/ahead/behind；`.drx-gitmark*` 样式）与
+    `useGitWorkspaceMarker`（按路径 memo + 5s TTL + 上限 128，失败静默无标记）。
+    挂载面：① explorer「远程工作区」footer 行；② 设置页「当前机器最近工作区」行；
+    ③ 选择器「最近工作区」快捷入口；④ 选择器底部「已选路径」行。
+- **兼容**：所有失败路径（离线 / 无凭据 / 非仓库 / 非镜像）都渲染为空，不影响既有
+  行为；不依赖 better-sidebar 版本（纯 dsh-remote 自有路由 + 自有 UI 面）。
 ### 移除：独立「🖥 远程终端」标签页（冗余——默认终端 tab 已接管远程会话）
 
 - **问题**：自建「🖥 远程终端」tab（`SIDEBAR_TERMINAL_ID` / `RemoteTerminalPane`）
