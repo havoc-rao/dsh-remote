@@ -3,6 +3,31 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 新增：远程连接「刷新 / 重新建立连接」——连接掉线一键恢复
+
+- **问题**：SSH 连接掉线（空闲超时 / 网络抖动 / 远端重启）后，远程目录树报
+  `cannot list …: 远程目录读取失败: browse failed: no credentials: set a password,
+  a privateKeyPath, or enable useAgent to connect`。原因是 per-machine 路由池在
+  **创建时**快照凭据；若当时钥匙串不可用（锁屏 / security 短暂失败）或密码本就未
+  保存，掉线后的自动重连会永远拿不到凭据，且原「刷新」只是重新拉列表，不会重建
+  连接——错误行一直钉死，只能重启宿主或等 30 分钟池缓存过期。
+- **修复（宿主半）**：
+  - `machinePoolOf` 为每个路由池挂 `passwordResolver`，**每次 connect 都重新解析**
+    钥匙串凭据——钥匙串瞬断自愈，不再依赖创建时的快照；
+  - 新增 `POST /dsh-remote/reconnect`：按 `machineId` / 远程路径归属机器 /
+    工作区选择（含 ephemeral）/ profile 默认机解析目标，**拆池重建并重连**（echo ok
+    验证 + 平台重探测），返回 `{ ok, machineId, …status }`；凭据类失败返回
+    `credential: true` 供 UI 给出「去设置补凭据」的明确提示；
+  - `/ls`、`/read`、`/write`、`/fs` 出错响应新增 `credential` 标记（分类复用
+    errors.js）。
+- **修复（浏览器半）**：
+  - 远程树工具栏「刷新」升级为**重新连接 + 刷新列表**（有远程机器时）：先拆池重连，
+    再清缓存重列所有展开层级；
+  - 远程树错误行 / 软错误行新增「重新连接」按钮（↻），点击即恢复；
+  - 工作区选择器（DirPicker）远程页错误行新增「重新连接」按钮；
+  - 宿主 FileTree 的错误行在凭据缺失时追加提示文案（「请到 设置 → 远程工作区
+    补充密码 / 私钥后刷新」）。
+
 ### 重构：远程上下文「按工作区隔离」（store 不再全局泄漏）
 
 - **问题**：`machines.json` 的 `currentId`（上次“设为当前”的机器）与机器保存的
