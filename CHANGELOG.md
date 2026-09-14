@@ -3,6 +3,56 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 修复：侧栏 DirPicker 又丢组件替换——slot 解析必须早于 `slots.inject`（enhanced 组合 profile）
+- **现象**：组合 `dsh-enhanced-workspace` 的 profile 下，侧栏「添加工作区」
+  （`Browser.tsx` 的 add entry，即 enhanced 自有 hole
+  `enhanced-workspace.workspace.directoryFlow` 的渲染位）不再出现 dsh-remote 的
+  DirPicker，回落原生目录选择器；无任何报错，纯静默失效。
+- **根因**：`ebbfa8b`（合并 origin/main 0.8.12–0.8.14）为「热插拔注入不等
+  slot-config fetch」把 **侧栏席位**的 `slots.inject` 提到了 `await
+  fetchSidebarDirectoryFlowSlot()` 之前，并把 inject 的 key 固定成官方
+  `sidebar.workspaces.directoryFlow`、注册 name 留在回调里读变量。但
+  `slots.inject` 在目标槽位**已声明**时是**同步**执行回调的，`register` 又要求
+  注册目标已声明——于是回调在 await 落地前触发，读到的仍是默认官方 key：
+  DirPicker 被登记进「官方子槽位已注册、但 enhanced 遮蔽后无人渲染」的那个席位，
+  真正的 enhanced 自有 hole 永远空置。
+- **修复**（`lib/client.js`）：先 `await` 取回 `sidebarDirectoryFlowSlot`，再按
+  **该 key 本身** `slots.inject` + `register`——inject 的声明等待语义会等
+  enhanced 自有 hole 声明后再生效，与两侧声明时序无关。sessions / settings /
+  betterSidebar / hero 这些与 key 无关的注入仍留在 await 之前（热插拔集成不等
+  fetch），只有侧栏席位延后。
+- **回归测试**（`test/client-lifecycle.test.js`）：新增 enhanced 组合用例——官方
+  子槽位与 enhanced hole 同时声明时，DirPicker 必须落在 enhanced hole、官方席位
+  保持空置（该用例在旧代码上失败，已用 stash 复现验证）；另补「slot-config 探测
+  失败回落官方席位」用例；目录席位用例改为 `await plugin.apply()`（解析晚于
+  fetch 是契约的一部分）。
+### 新增：会话头「在应用中打开」按工作区自适应——远程会话经本地编辑器 SSH 打开真实远程目录
+
+- **问题**：宿主 open-in-app 的会话头按钮打开的是**会话 cwd**，而远程会话的 cwd 是
+  dsh-remote 的**本地镜像目录**（`$DSH_HOME/remote-workspaces/<host>-<user>-<port>/<base>`），
+  于是按钮只会打开镜像，无法一键用本机编辑器编辑真实远程工程。
+- **实现**（宿主半，`lib/remote-open.js` + `lib/index.js`）：向宿主的 open-in-app
+  **工作区目标 provider** 扩展点注册 provider `dsh-remote`——服务为**可选**
+  （只 `ctx.get('openInApp')`，宿主没有该扩展点时静默不注册）：
+  - `resolve({path, sessionId})`：cwd 命中镜像 → 返回
+    `{ provider, label: user@host:<远程目录>, apps }`；普通本地目录返回 `null`
+    （**不认领**，按钮保持原生本地逻辑）；会话在镜像子目录时按相对路径打开对应子目录；
+    装了至少一个远程可用编辑器才认领，否则不认领（按钮仍可打开本地镜像）。
+  - `launch({app, path, sessionId})`：重新解析归属（不信任缓存的目标），构造 argv 并
+    detached 启动：VS Code / Cursor / Insiders / Windsurf =
+    `--remote ssh-remote+<host> <远程目录>`；Zed = `ssh://<host><远程目录>`。认领后任何
+    失败都**报错**，绝不回退打开本地镜像；`sessionId` 与 `path` 不一致直接拒绝（纵深防御）。
+  - **SSH 目标解析**（`lib/sshconfig.js` 新增 `matchSshAlias`）：优先 `~/.ssh/config` 中
+    host/port/user 匹配的**具体 alias**（`Host *` 等通配一律跳过；无 `User` 行的条目只在
+    机器 user == 本机登录用户时才认，避免拿错身份认证），无 alias 的 22 端口用
+    `user@host`，Zed 例外支持内联 `user@host:port`；都不成立 → 抛错并给出建议的
+    `Host / HostName / User / Port` 片段。
+  - 编辑器 CLI 探测：显式安装位置（macOS `.app/Contents/Resources/app/bin/<cli>`、
+    Linux/Windows 常见路径）优先，其次 PATH；每个插件生命周期缓存一次，启动 `ENOENT`
+    时清缓存重探并重试一次。
+- **兼容**：宿主未提供扩展点 / 未装任何远程可用编辑器 / 普通本地工作区 → 行为与外观不变。
+- **测试**：`test/remote-open.test.js`（URI 形态、镜像子目录映射、SSH 目标三级解析、argv、
+  探测顺序、认领/拒绝/ENOENT 重试）与 `test/sshconfig.test.js` 新增的 `matchSshAlias` 用例。
 ### 新增：远程工作区 git 标记——工作区级分支 / 脏状态，经远端主机取数并显示在工作区行上
 
 - **问题**：上一轮的 gitSource 数据源覆盖的是**会话级** git 表面（GitView / explorer

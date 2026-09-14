@@ -11,6 +11,9 @@ const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.
 const SETTINGS = 'settings.section'
 const HERO = 'conversation.hero.workspace.directoryFlow'
 const SIDEBAR = 'sidebar.workspaces.directoryFlow'
+// The enhanced browser's plugin-owned hole (dsh-enhanced-workspace declares it
+// as a child of its shadowing `sidebar.workspaces` entry).
+const ENHANCED = 'enhanced-workspace.workspace.directoryFlow'
 
 // A dependency callback runs only when ALL its requested names exist. Removing
 // a dependency disposes the callback; adding it back creates a fresh lifetime.
@@ -52,7 +55,7 @@ function dependencies(initial = []) {
   }
 }
 
-function loadClient(protocol = 'https:', platform = 'Linux x86_64') {
+function loadClient(protocol = 'https:', platform = 'Linux x86_64', slotConfig = {}) {
   let plugin
   const requests = []
   // Effects are recorded (and run on demand by `runEffects`) so a component
@@ -89,9 +92,12 @@ function loadClient(protocol = 'https:', platform = 'Linux x86_64') {
     navigator: { languages: ['en'], platform },
     URL,
     console,
+// The bundle's slot-config probe races a 3s timeout; the stub fetch below
+    // resolves first with `slotConfig`, so the timeout branch never fires.
+    setTimeout: () => 0,
     fetch: async (url, options) => {
       requests.push({ url, options })
-      return { ok: true, json: async () => ({}) }
+      return { ok: true, json: async () => slotConfig }
     },
   }, { filename: 'lib/client.js' })
   assert.ok(plugin, 'classic module loader receives the plugin')
@@ -424,11 +430,14 @@ test('settings can arrive after apply and remount without duplicate registration
 })
 
 for (const seat of [SIDEBAR, HERO]) {
-  test(`${seat} registers independently of the other directory seat`, (t) => {
+  test(`${seat} registers independently of the other directory seat`, async (t) => {
     const { plugin } = loadClient()
     const host = createHost([SETTINGS, seat])
     t.after(() => host.ctx.dispose())
-    plugin.apply(host.ctx)
+    // The sidebar seat is declared only after the slot-config probe resolves
+    // (the resolved key must exist BEFORE slots.inject — see the enhanced-hole
+    // test below), so the apply promise is part of the contract here.
+    await plugin.apply(host.ctx)
     const settings = host.registrations.get(SETTINGS)
     assert.deepEqual([...host.registrations.keys()].sort(), [SETTINGS, seat].sort())
     assert.equal(host.registrations.get(seat).meta.priority, -100)
@@ -443,6 +452,33 @@ for (const seat of [SIDEBAR, HERO]) {
     assert.equal(host.registrations.get(SETTINGS), settings, 'directory lifecycle leaves settings mounted')
   })
 }
+
+test('the resolved enhanced hole owns the sidebar picker seat (add-entry component replacement)', async (t) => {
+  const { plugin } = loadClient({ sidebarDirectoryFlowSlot: ENHANCED })
+  // Combined profile: the built-in entry keeps the OFFICIAL child declared
+  // (shadow ≠ unload) while the enhanced entry declares its own hole. Both
+  // seats exist, so this isolates "which one the picker lands on".
+  const host = createHost([SETTINGS, HERO, SIDEBAR, ENHANCED])
+  t.after(() => host.ctx.dispose())
+  await plugin.apply(host.ctx)
+  // The DirPicker must occupy the ENHANCED hole. Landing on the official
+  // (declared but never rendered) child is the silent-failure shape: no error,
+  // and the enhanced add entry falls back to the native directory picker.
+  assert.deepEqual([...host.registrations.keys()].sort(), [SETTINGS, HERO, ENHANCED].sort())
+  assert.equal(host.registrations.get(ENHANCED).meta.priority, -100)
+  assert.equal(host.registrations.get(ENHANCED).render, host.registrations.get(HERO).render,
+    'both directory seats share the DirPicker component')
+  assert.equal(host.registrations.has(SIDEBAR), false, 'the shadowed official child must stay unoccupied')
+})
+
+test('a failed slot-config probe falls back to the official sidebar seat', async (t) => {
+  const { plugin } = loadClient()
+  const host = createHost([SETTINGS, HERO, SIDEBAR, ENHANCED])
+  t.after(() => host.ctx.dispose())
+  await plugin.apply(host.ctx)
+  assert.deepEqual([...host.registrations.keys()].sort(), [SETTINGS, HERO, SIDEBAR].sort())
+  assert.equal(host.registrations.has(ENHANCED), false)
+})
 
 test('optional better-sidebar attaches late and cleans up tabs and subscription on removal', (t) => {
   const { plugin } = loadClient()

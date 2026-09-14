@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseSshConfig, importableEntries } from '../lib/sshconfig.js'
+import { parseSshConfig, importableEntries, matchSshAlias } from '../lib/sshconfig.js'
 
 const SAMPLE = `
 # comment
@@ -42,4 +42,24 @@ test('importableEntries skips wildcards and empty blocks', () => {
 test('empty / missing text yields no entries', () => {
   assert.deepEqual(parseSshConfig(''), [])
   assert.deepEqual(importableEntries('# only a comment\n'), [])
+})
+
+test('matchSshAlias matches a machine on host + port + user', () => {
+  const entries = parseSshConfig(SAMPLE)
+  assert.equal(matchSshAlias(entries, { host: '9.134.186.191', port: 36000, username: 'mmdev', localUser: 'havoc' }), 'build')
+  assert.equal(matchSshAlias(entries, { host: '10.0.0.2', port: 22, username: 'ops', localUser: 'havoc' }), 'deploy')
+  // Port and user are part of the identity, not decoration.
+  assert.equal(matchSshAlias(entries, { host: '9.134.186.191', port: 22, username: 'mmdev', localUser: 'havoc' }), '')
+  assert.equal(matchSshAlias(entries, { host: '10.0.0.2', port: 22, username: 'root', localUser: 'havoc' }), '')
+  // No HostName → the alias itself is what ssh resolves; only a real host match counts.
+  assert.equal(matchSshAlias(entries, { host: 'build', port: 22, username: '', localUser: 'havoc' }), '')
+})
+
+test('matchSshAlias never asserts a wildcard alias, nor a user-less entry for another user', () => {
+  // A `Host *` block names no single machine and must never be handed to an editor.
+  assert.equal(matchSshAlias(parseSshConfig(SAMPLE), { host: '10.0.0.1', port: 22, username: 'root', localUser: 'havoc' }), '')
+  const userless = parseSshConfig('Host box\n  HostName 10.0.0.9\n')
+  // ssh would authenticate as the LOCAL user, so only a matching local user passes.
+  assert.equal(matchSshAlias(userless, { host: '10.0.0.9', port: 22, username: 'root', localUser: 'havoc' }), '')
+  assert.equal(matchSshAlias(userless, { host: '10.0.0.9', port: 22, username: 'havoc', localUser: 'havoc' }), 'box')
 })
