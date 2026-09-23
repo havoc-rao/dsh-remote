@@ -64,6 +64,10 @@ test('client selects current session, not first list entry; terminal gate enable
   const provStart = client.indexOf('    function registerRemoteTerminalProvider(')
   const matchStart = client.indexOf('const match = (sessionId, cwd, tabId) => {', provStart)
   const matchEnd = client.indexOf('\n      }', matchStart) + 8
+  // The extracted match references the terminal-tunnel lookup; in this
+  // standalone slice no tunnel is ever registered, so tunnelFor resolves
+  // null and the gate falls back to the mirror semantics under test.
+  ctx.tunnelFor = () => null
   const gate = vm.runInContext(client.slice(matchStart + 'const match = '.length, matchEnd), ctx)
   assert.equal(gate(null, '/mirrors/a/project/src', 'terminal:x'), true)
   assert.equal(gate(null, '/mirrors/a/project/src', 'agent:x'), false)
