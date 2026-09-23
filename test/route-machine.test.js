@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { findMirrorsForRemotePath, pickMirrorForRemotePath, normalizeRoutePath } from '../lib/route-machine.js'
+import { findMirrorsForRemotePath, pickMirrorForRemotePath, normalizeRoutePath, machineForMirror } from '../lib/route-machine.js'
 
 /** Build a fake <mirrorRoot>/<tag>/<base>/.dsh-remote-meta.json tree. */
 function makeMirrorRoot(specs) {
@@ -11,9 +11,14 @@ function makeMirrorRoot(specs) {
   for (const s of specs) {
     const dir = path.join(root, s.tag, s.base)
     mkdirSync(dir, { recursive: true })
-    writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify({
+    const meta = {
       host: s.host, port: s.port, username: s.username ?? 'root', remotePath: s.remotePath,
-    }))
+    }
+    // Mirror meta v2 extras (carried through only when present).
+    if (s.transport) meta.transport = s.transport
+    if (s.machineId) meta.machineId = s.machineId
+    if (s.remoteIdentity) meta.remoteIdentity = s.remoteIdentity
+    writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify(meta))
   }
   return root
 }
@@ -55,8 +60,10 @@ test('pickMirrorForRemotePath prefers the CURRENT machine mirror over a saved on
     const cur = { host: 'h17', port: 36000, username: 'root' }
     const picked = pickMirrorForRemotePath(root, '/data/workspace/wxa-agent-dashboard', cur)
     assert.equal(picked.host, 'h17')
-    // Without a current machine, a "saved" (connectable) machine wins.
-    const savedFirst = pickMirrorForRemotePath(root, '/data/workspace/wxa-agent-dashboard', null, (h) => h === 'h5')
+    // Without a current machine, a "saved" (connectable) machine wins. The
+    // isSaved callback receives the FULL mirror entry (signature changed from
+    // the old (host, port, username) triple).
+    const savedFirst = pickMirrorForRemotePath(root, '/data/workspace/wxa-agent-dashboard', null, (entry) => entry.host === 'h5')
     assert.equal(savedFirst.host, 'h5')
     // Otherwise the first match wins.
     const first = pickMirrorForRemotePath(root, '/data/workspace/wxa-agent-dashboard', null)
@@ -76,4 +83,85 @@ test('real mirror registry on this machine resolves the known remotes', () => {
   if (!luban && !wxa) return // mirrors absent on this machine — nothing to assert
   if (luban) assert.equal(luban.remotePath, '/data/workspace/luban-grafana')
   if (wxa) assert.equal(wxa.remotePath, '/data/workspace/wxa-agent-dashboard')
+})
+
+test('findMirrorsForRemotePath: v2 (transport) metas pass transport/machineId/remoteIdentity through; v1 entries stay bare', () => {
+  const root = makeMirrorRoot([
+    { tag: 'tunnel-m9', base: 'proj', host: '127.0.0.1', port: 0, username: '', transport: 'vscode-tunnel', machineId: 'm9', remoteIdentity: 'rmt-9', remotePath: '/srv/t/proj' },
+    { tag: 'h5-root-36000', base: 'luban', host: 'h5', port: 36000, remotePath: '/data/workspace/luban-grafana' },
+  ])
+  try {
+    const tunnel = findMirrorsForRemotePath(root, '/srv/t/proj')
+    assert.equal(tunnel.length, 1)
+    assert.equal(tunnel[0].host, '127.0.0.1')
+    assert.equal(tunnel[0].transport, 'vscode-tunnel')
+    assert.equal(tunnel[0].machineId, 'm9')
+    assert.equal(tunnel[0].remoteIdentity, 'rmt-9')
+    assert.equal(tunnel[0].tag, 'tunnel-m9')
+    // v1 entry shape is untouched (regression: no transport identity keys).
+    const v1 = findMirrorsForRemotePath(root, '/data/workspace/luban-grafana')
+    assert.equal(v1.length, 1)
+    assert.deepEqual(Object.keys(v1[0]).sort(), ['host', 'mirrorDir', 'port', 'remotePath', 'tag', 'username'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('pickMirrorForRemotePath: isSaved receives the FULL mirror entry (v2 saved ⇔ machineId + transport match)', () => {
+  const root = makeMirrorRoot([
+    { tag: 'tunnel-m9', base: 'wxa', host: '127.0.0.1', port: 0, username: '', transport: 'vscode-tunnel', machineId: 'm9', remotePath: '/srv/t/wxa' },
+    { tag: 'tunnel-m2', base: 'wxa', host: '127.0.0.1', port: 0, username: '', transport: 'vscode-tunnel', machineId: 'm2', remotePath: '/srv/t/wxa' },
+  ])
+  try {
+    const seen = []
+    const picked = pickMirrorForRemotePath(root, '/srv/t/wxa', null, (entry) => {
+      seen.push(entry)
+      return entry.transport === 'vscode-tunnel' && entry.machineId === 'm2'
+    })
+    assert.equal(picked.machineId, 'm2')
+    // isSaved receives the FULL entry (dir order is filesystem-dependent, so
+    // only the winning call is guaranteed — it must carry the v2 identity).
+    assert.ok(seen.length >= 1)
+    assert.ok(seen.every((e) => e.transport === 'vscode-tunnel' && 'machineId' in e), 'every consulted entry is a full v2 entry')
+    // A tunnel mirror whose machineId is NOT saved is not "saved" — the pick
+    // falls back to the first match (legacy v1 behavior for no-saved-match).
+    const fallback = pickMirrorForRemotePath(root, '/srv/t/wxa', null, (e) => e.machineId === 'ghost')
+    assert.ok(fallback)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('machineForMirror: v2 resolves by stable machineId + transport; missing → null (never the placeholder-triple lookalike)', () => {
+  const registry = [
+    { id: 'm9', name: 'mac', transport: 'vscode-tunnel', host: '127.0.0.1', port: 0, username: '' },
+    { id: 'm2', name: 'mac2', transport: 'vscode-tunnel', host: '127.0.0.1', port: 0, username: '' },
+    { id: 'ssh1', name: 'box', host: 'h5', port: 36000, username: 'root' },
+  ]
+  // v2: exact id + transport → the record.
+  const hit = machineForMirror({ host: '127.0.0.1', port: 0, username: '', transport: 'vscode-tunnel', machineId: 'm9' }, registry)
+  assert.equal(hit.record.id, 'm9')
+  assert.equal(hit.transport, 'vscode-tunnel')
+  assert.equal(hit.machineId, 'm9')
+  // v2: id NOT in the registry → null, even though another machine shares the
+  // exact placeholder host/port/user triple (the ssh-guess trap).
+  const ghost = machineForMirror({ host: '127.0.0.1', port: 0, username: 'root', transport: 'vscode-tunnel', machineId: 'm7' }, registry)
+  assert.equal(ghost, null)
+  // v2: id exists but transport differs → null.
+  assert.equal(machineForMirror({ host: '127.0.0.1', port: 0, username: '', transport: 'vscode-tunnel', machineId: 'ssh1' }, registry), null)
+  // v2: machineId missing entirely → null.
+  assert.equal(machineForMirror({ host: '127.0.0.1', port: 0, username: '', transport: 'vscode-tunnel' }, registry), null)
+  // v1: legacy host/port/username triple lookup (record or { record: null }).
+  const v1 = machineForMirror({ host: 'h5', port: 36000, username: 'root' }, registry)
+  assert.equal(v1.record.id, 'ssh1')
+  assert.equal(v1.transport, 'ssh')
+  assert.equal(v1.machineId, null)
+  const v1miss = machineForMirror({ host: 'h5', port: 36000, username: 'nobody' }, registry)
+  assert.equal(v1miss.record, null)
+  assert.equal(v1miss.transport, 'ssh')
+  // An explicit transport:'ssh' meta resolves exactly like a bare v1 meta.
+  assert.equal(machineForMirror({ host: 'h5', port: 36000, username: 'root', transport: 'ssh' }, registry).record.id, 'ssh1')
+  // Missing/absent registry is tolerated (empty lookup, no throw).
+  assert.equal(machineForMirror({ host: 'h5', port: 36000, username: 'root' }, null).record, null)
+  assert.equal(machineForMirror({ transport: 'vscode-tunnel', machineId: 'm9' }, undefined), null)
 })

@@ -47,6 +47,53 @@ test('mirror origin preserves SSH username/port and only valid project directori
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.dsh-remote-meta.json'))).username, 2202)
 })
 
+test('ensureMirror v1 meta stays byte-for-byte the legacy ssh JSON (no v2 keys, same key order)', (t) => {
+  const { root } = fixture(t)
+  const ctx = mirrorCode(root)
+  const dir = ctx.ensureMirror('/srv/project', { host: 'host-a', username: 'alice', port: 2202 })
+  const raw = fs.readFileSync(path.join(dir, '.dsh-remote-meta.json'), 'utf8')
+  const meta = JSON.parse(raw)
+  // The v1 writer must produce the EXACT pre-v2 bytes: same key order and
+  // spacing. Re-stringifying the same object literal reproduces it.
+  assert.equal(raw, JSON.stringify(
+    { host: 'host-a', port: 2202, username: 'alice', remotePath: '/srv/project', createdAt: meta.createdAt },
+    null, 2,
+  ))
+  assert.ok(!('schemaVersion' in meta))
+  assert.ok(!('transport' in meta))
+  assert.ok(!('machineId' in meta))
+})
+
+test('ensureMirror v2 (vscode-tunnel) keys mirrors by stable machineId — never the placeholder host/port/user triple', (t) => {
+  const { root } = fixture(t)
+  const ctx = mirrorCode(root)
+  const dir = ctx.ensureMirror('/srv/t/proj', { host: '127.0.0.1', username: '', port: 0, transport: 'vscode-tunnel', machineId: 'm-1', remoteIdentity: 'rmt-x' })
+  assert.ok(dir.startsWith(path.join(root, 'tunnel-m-1') + path.sep), 'mirror root is tunnel-<machineId>: ' + dir)
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, '.dsh-remote-meta.json'), 'utf8'))
+  assert.equal(meta.schemaVersion, 2)
+  assert.equal(meta.transport, 'vscode-tunnel')
+  assert.equal(meta.machineId, 'm-1')
+  assert.equal(meta.remoteIdentity, 'rmt-x')
+  assert.equal(meta.port, 0, 'placeholder port 0 recorded raw — no ssh normalization')
+  assert.equal(meta.username, '', 'placeholder username recorded raw — no root fallback')
+  assert.equal(meta.host, '127.0.0.1')
+  assert.equal(meta.remotePath, '/srv/t/proj')
+  // Idempotent same-origin lookup returns the same dir.
+  assert.equal(ctx.mirrorDirFor('/srv/t/proj', { host: '127.0.0.1', username: '', port: 0, transport: 'vscode-tunnel', machineId: 'm-1' }), dir)
+  // Different machine id → a DIFFERENT mirror root (no cross-machine collision).
+  const other = ctx.mirrorDirFor('/srv/t/proj', { host: '127.0.0.1', username: '', port: 0, transport: 'vscode-tunnel', machineId: 'm-2' })
+  assert.ok(other.startsWith(path.join(root, 'tunnel-m-2') + path.sep), other)
+  assert.notEqual(other, dir)
+  // Missing machineId → tunnel-unknown fallback (still no host/port/user key).
+  const fallback = ctx.mirrorDirFor('/srv/t/other', { host: '127.0.0.1', username: '', port: 0, transport: 'vscode-tunnel' })
+  assert.ok(fallback.startsWith(path.join(root, 'tunnel-unknown') + path.sep), fallback)
+  // The washed-shell regression: an ssh ctx on the same placeholder values
+  // must NOT collide with the tunnel root.
+  const ssh = ctx.mirrorDirFor('/srv/t/proj', { host: '127.0.0.1', username: 'root', port: 22 })
+  assert.ok(ssh.startsWith(path.join(root, '127.0.0.1-root-22') + path.sep), ssh)
+  assert.notEqual(ssh, dir)
+})
+
 test('client selects current session, not first list entry; terminal gate enables remote mirrors', () => {
   const scopeStart = client.indexOf('    function scopeCwdGuess()')
   const scopeEnd = client.indexOf('\n    // ── Settings', scopeStart)

@@ -124,3 +124,39 @@ test('poolKey: a missing port defaults to 22 so both spellings share one pool', 
   assert.equal(poolKey({ host: 'h', username: 'u' }), 'u@h:22')
   assert.equal(poolKey({ host: 'h', username: 'u', port: '22' }), 'u@h:22')
 })
+
+test('resolveMirror: a v2 (vscode-tunnel) meta mirror resolves to a machine carrying the transport identity', () => {
+  const d = root()
+  // v2 mirror exactly as ensureMirror writes it for tunnel machines.
+  const tdir = path.join(d, 'tunnel-m9', 'proj')
+  mkdirSync(tdir, { recursive: true })
+  writeFileSync(path.join(tdir, '.dsh-remote-meta.json'), JSON.stringify({
+    schemaVersion: 2, transport: 'vscode-tunnel', machineId: 'm9', remoteIdentity: 'rmt-9',
+    host: '127.0.0.1', port: 0, username: '', remotePath: '/srv/t/proj', createdAt: new Date(0).toISOString(),
+  }))
+
+  const a = resolveMirror(tdir, d)
+  assert.equal(a.remotePath, '/srv/t/proj')
+  assert.equal(a.mirrorDir, tdir)
+  assert.equal(a.machine.host, '127.0.0.1')
+  assert.equal(a.machine.port, 0, 'port is the RAW placeholder value, never re-normalized to 22')
+  assert.equal(a.machine.username, '')
+  assert.equal(a.machine.transport, 'vscode-tunnel')
+  assert.equal(a.machine.machineId, 'm9')
+  assert.equal(a.machine.remoteIdentity, 'rmt-9')
+  // v1-shaped consumers keep working on the same host surface (poolKey only
+  // needs host/port/username and stays stable for the ssh key space).
+  assert.equal(poolKey(a.machine), '@127.0.0.1:22')
+  rmSync(d, { recursive: true, force: true })
+})
+
+test('resolveMirror: v1 metas resolve to the legacy machine shape — no transport/machineId keys', () => {
+  const d = root()
+  const m = mirror(d, { host: '10.0.0.1', username: 'lucas', remotePath: '/home/lucas/proj', base: 'proj' })
+  const r = resolveMirror(m, d)
+  assert.deepEqual(Object.keys(r.machine).sort(), ['host', 'port', 'username'])
+  assert.ok(!('transport' in r.machine), 'v1 machine carries no transport key')
+  assert.ok(!('machineId' in r.machine))
+  assert.ok(!('remoteIdentity' in r.machine))
+  rmSync(d, { recursive: true, force: true })
+})
