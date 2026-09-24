@@ -3,6 +3,41 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 新增：远程 git 数据源对齐 sidebar main 契约——`gitLog` 固定 roots + 游标分页与 `gitShow`
+
+- **问题**：better-sidebar **main（v0.24.0，HEAD≈1db44fe）** 的 Git 面板调用的是新契约
+  `gitApi.gitLog(scope, count, skip, worktree, options?: {roots, cursor}, signal)`，而
+  dsh-remote 的 GitDataSource 只实现了旧契约方法面（`gitLogGraph`），远程会话
+  first-match 命中本 provider 后 `gitApi.gitLog` 同步 TypeError → 错误横幅、历史区
+  「暂无提交」；diff 视图的逐文件内容读取 `gitShow` 同样缺失。
+- **实现**（宿主半 + 浏览器半，均镜像宿主 `git.log` / `git.show` 路由语义）：
+  - `lib/client.js`：`makeRemoteGitSource` 新增 `gitLog`（`options.roots` /
+    `options.cursor` 未传时走旧 skip/count 数组模式；`undefined` 字段不上线，与宿主
+    wire 形状一致；`sessionId` 随 payload 携带供游标绑定）与 `gitShow`，`gitLogGraph`
+    原样保留（旧版侧边栏兼容）；
+  - `lib/index.js`：新增 `log` op——固定 roots 分页：`roots: []` 钉住服务端自己的
+    `HEAD^{commit}` tip（unborn 仓库返回空页），非空 roots 逐项 40-hex + rev-parse
+    重新验证（上限 200，重复去重 + 排序）；后续页只带响应里的不透明 cursor；
+    `hasMore = 本页满 batch`，游标仅在 hasMore 时携带。游标为**无状态 base64url
+    JSON**（`lib/git-parse.js` 新增 `encodeLogCursor` / `decodeLogCursor`），绑定
+    会话 + 仓库 + 钉住的 roots + 下一 offset；跨仓库 / 跨会话 / 畸形 / 过期（roots
+    已消失）游标一律**丢弃并按服务端自身 tip 重新锚定**，绝不串台。pretty 沿用
+    logGraph 同款 `%H%x1f%P%x1f%s%x1f%an%x1f%ai%x1f%D`，`log` 与 `logGraph` 均改为
+    `--decorate=short`（GitLogEntry.refs 字段文档语义——显式 40-hex roots 走
+    `git log --topo-order -n <count> --skip <offset> --decorate=short --pretty=… <tips…> --`）；
+  - 新增 `show` op：`git show --no-ext-diff --no-color --format= <rev>:<path>`
+    （输出 4MB cap），rev 可为 `:0`（index）；path 拒绝绝对路径 / 反斜杠 / `..` 逃逸
+    （`isSafeGitShowPath`）；git 失败（path 不在该 rev / 非零退出）→ `{ content: null }`
+    （与宿主 catch-all 一致）。
+- **测试**：`test/git-parse.test.js` 新增游标编解码（含伪造 / 畸形 / 跨字段校验）、
+  root-hash 与 show-path 校验、`buildLogPage` 用例；新增
+  `test/git-source-wiring.test.js`——真实 client bundle 在 VM 中跑通 gitSource 槽位
+  注册 / match / source 方法面，并断言 `gitLog` / `gitShow` 的 `/dsh-remote/git` wire
+  形状（roots/游标/legacy 三态、sessionId 绑定、响应透传）；新增
+  `test/git-log-paging.test.js`——真实 git 集成（临时仓库）钉住 `log` / `show` op 的
+  命令形态（short 装饰、固定 tip 分页不重叠、missing path 非零退出等）。
+- **兼容**：未传 roots/cursor 时返回普通数组（旧行为不变）；`gitLogGraph` 仅改
+  装饰形态为 short（新旧消费者都按 short 分类）；旧宿主（无 gitSource 槽位）不受影响。
 ### 修复：侧栏 DirPicker 又丢组件替换——slot 解析必须早于 `slots.inject`（enhanced 组合 profile）
 - **现象**：组合 `dsh-enhanced-workspace` 的 profile 下，侧栏「添加工作区」
   （`Browser.tsx` 的 add entry，即 enhanced 自有 hole

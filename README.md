@@ -140,6 +140,13 @@ implementation.
 > `gitSource` slot — every operation (status / history / stage / commit /
 > checkout / fetch / discard / revert / cherry-pick) runs as a `git -C …`
 > command on the remote host, byte-compatible with the local surfaces.
+> The history lens (v0.24.0+) pages through **fixed-roots + opaque-cursor**
+> pagination (`gitLog`: `roots: []` pins the server's own HEAD tip, later
+> pages ride only the response cursor — bound to session/repository, with a
+> foreign/stale cursor re-anchoring on the server's tips), and the diff
+> views read per-file contents through `gitShow` (`git show <rev>:<path>`,
+> `:0` = index) — both mirroring the host's `git.log` / `git.show` routes;
+> commit-row refs are the `--decorate=short` form.
 > Older sidebars keep their own local git routes unchanged.
 
 ```bash

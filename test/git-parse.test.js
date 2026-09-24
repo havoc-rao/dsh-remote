@@ -8,6 +8,8 @@ import {
   parseStatusV1, parseBranchHeader, parseWorktreeList, parseLogGraphLines,
   parseForEachRefPairs, parseLeftRightCount, countStatusLines,
   parseHeaderSync, buildWorkspaceMarker,
+  isLogRootHash, base64urlEncode, base64urlDecode, encodeLogCursor, decodeLogCursor,
+  isSafeGitShowPath, buildLogPage,
 } from '../lib/git-parse.js'
 
 test('parseStatusV1: plain branch + entries (porcelain v1 -z -b)', () => {
@@ -98,9 +100,11 @@ test('parseWorktreeList: -z framing and Windows paths', () => {
   assert.deepEqual(rows, [{ path: 'C:\\proj', branch: 'main', locked: false, prunable: false }])
 })
 
-test('parseLogGraphLines: rows with full hashes, parents, raw full decorations', () => {
+test('parseLogGraphLines: rows with full hashes, parents, short decorations', () => {
+  // `--decorate=short` %D text: `HEAD -> main, origin/main` (the
+  // GitLogEntry.refs field form — the sidebar classifies the short names).
   const out = [
-    'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b1\u001fa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0\u001fsubject one\u001fAuthor One\u001f2026-09-10 10:00:00 +0800\u001fHEAD -> refs/heads/main, refs/remotes/origin/main',
+    'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b1\u001fa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0\u001fsubject one\u001fAuthor One\u001f2026-09-10 10:00:00 +0800\u001fHEAD -> main, origin/main',
     'b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0\u001f\u001froot commit\u001fAuthor Two\u001f2026-09-01 08:00:00 +0000\u001f',
     '',
   ].join('\n')
@@ -112,7 +116,7 @@ test('parseLogGraphLines: rows with full hashes, parents, raw full decorations',
     subject: 'subject one',
     author: 'Author One',
     date: '2026-09-10 10:00:00 +0800',
-    refs: 'HEAD -> refs/heads/main, refs/remotes/origin/main',
+    refs: 'HEAD -> main, origin/main',
     parents: ['a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0'],
   })
   assert.equal(rows[0].hash.length, 7)
@@ -222,4 +226,117 @@ test('buildWorkspaceMarker: staged/untracked split and detached/unborn pass-thro
 test('countStatusLines: non-empty porcelain rows only', () => {
   assert.equal(countStatusLines(' M a.txt\n?? b\n\n'), 2)
   assert.equal(countStatusLines(''), 0)
+})
+
+// ── Fixed-roots + cursor log pagination helpers (the `log` op) ─────────────
+
+test('isLogRootHash: full lowercase object ids only', () => {
+  const hash = '0123456789abcdef0123456789abcdef01234567'
+  assert.equal(isLogRootHash(hash), true)
+  assert.equal(isLogRootHash(hash.toUpperCase()), false, 'case must match git object-id form')
+  assert.equal(isLogRootHash('HEAD'), false, 'ref names are refused before reaching git')
+  assert.equal(isLogRootHash('HEAD~2'), false, 'revision syntax is refused')
+  assert.equal(isLogRootHash(hash.slice(0, 7)), false, 'short hashes are not pins')
+  assert.equal(isLogRootHash(hash + '0'), false, '41 chars')
+  assert.equal(isLogRootHash('zz3456789abcdef0123456789abcdef01234567'), false, 'non-hex')
+  assert.equal(isLogRootHash(123), false, 'non-string')
+  assert.equal(isLogRootHash(undefined), false)
+})
+
+test('base64url: RFC 4648 §5 round trip (no padding), invalid input → null', () => {
+  // "f" → 0x66 → 'Zg'; 'fo' → 'Zm8'; 'foo' → 'Zm9v'; 'foob' → 'Zm9vYg=='-less.
+  assert.equal(base64urlEncode([0x66]), 'Zg')
+  assert.equal(base64urlEncode([0x66, 0x6f]), 'Zm8')
+  assert.equal(base64urlEncode([0x66, 0x6f, 0x6f]), 'Zm9v')
+  assert.deepEqual([...base64urlDecode('Zg')], [0x66])
+  assert.deepEqual([...base64urlDecode('Zm8')], [0x66, 0x6f])
+  assert.deepEqual([...base64urlDecode('Zm9v')], [0x66, 0x6f, 0x6f])
+  // url-safe alphabet + every byte value round trip.
+  const bytes = Array.from({ length: 256 }, (_, i) => i)
+  assert.deepEqual([...base64urlDecode(base64urlEncode(bytes))], bytes)
+  assert.equal(base64urlDecode(''), null)
+  assert.equal(base64urlDecode('a'), null, 'length % 4 === 1 is invalid')
+  assert.equal(base64urlDecode('Zg+='), null, 'standard alphabet/padding is foreign')
+  assert.equal(base64urlDecode('Z g'), null)
+  assert.equal(base64urlDecode(42), null, 'non-string')
+})
+
+test('encodeLogCursor/decodeLogCursor: opaque round trip with binding fields', () => {
+  const state = {
+    sessionId: 'ses-1',
+    repoKey: '/srv/repo',
+    roots: ['0123456789abcdef0123456789abcdef01234567', 'fedcba9876543210fedcba9876543210fedcba98'],
+    offset: 60,
+  }
+  const token = encodeLogCursor(state)
+  assert.equal(typeof token, 'string')
+  assert.match(token, /^[A-Za-z0-9_-]+$/, 'base64url alphabet only (opaque to clients)')
+  assert.equal(token.includes('ses-1'), false, 'never leaks plaintext fields')
+  assert.equal(token.includes('/srv'), false)
+  assert.deepEqual(decodeLogCursor(token), state)
+  // Non-ASCII session ids survive the UTF-8 round trip.
+  const cn = encodeLogCursor({ sessionId: '会话-1', repoKey: '/仓库', roots: [], offset: 0 })
+  assert.deepEqual(decodeLogCursor(cn), { sessionId: '会话-1', repoKey: '/仓库', roots: [], offset: 0 })
+})
+
+test('decodeLogCursor: structurally invalid / forged tokens → null (caller re-anchors)', () => {
+  const good = encodeLogCursor({ sessionId: 's', repoKey: '/r', roots: ['0123456789abcdef0123456789abcdef01234567'], offset: 30 })
+  assert.notEqual(decodeLogCursor(good), null)
+  assert.equal(decodeLogCursor(''), null)
+  assert.equal(decodeLogCursor('not-base64!'), null)
+  assert.equal(decodeLogCursor('AAAA'), null, 'not JSON')
+  assert.equal(decodeLogCursor(undefined), null)
+  assert.equal(decodeLogCursor(null), null)
+  // Wrong/unknown shape versions are refused (schema drift never parses).
+  const foreign = { v: 2, s: 's', r: '/r', t: [], o: 0 }
+  assert.equal(decodeLogCursor(base64urlEncode([...new TextEncoder().encode(JSON.stringify(foreign))])), null)
+  // Every field is struct-checked: missing session/repo, bad roots (ref
+  // names, short hashes, non-strings), negative / fractional / NaN offset.
+  const cases = [
+    { v: 1, r: '/r', t: [], o: 0 },
+    { v: 1, s: 's', t: [], o: 0 },
+    { v: 1, s: '', r: '/r', t: [], o: 0 },
+    { v: 1, s: 's', r: '', t: [], o: 0 },
+    { v: 1, s: 's', r: '/r', o: 0 },
+    { v: 1, s: 's', r: '/r', t: 'nope', o: 0 },
+    { v: 1, s: 's', r: '/r', t: ['HEAD'], o: 0 },
+    { v: 1, s: 's', r: '/r', t: ['abc'], o: 0 },
+    { v: 1, s: 's', r: '/r', t: [123], o: 0 },
+    { v: 1, s: 's', r: '/r', t: [], o: -1 },
+    { v: 1, s: 's', r: '/r', t: [], o: 1.5 },
+    { v: 1, s: 's', r: '/r', t: [], o: '30' },
+  ]
+  for (const bad of cases) {
+    assert.equal(decodeLogCursor(base64urlEncode([...new TextEncoder().encode(JSON.stringify(bad))])), null,
+      JSON.stringify(bad))
+  }
+})
+
+test('isSafeGitShowPath: repository-relative blob paths only', () => {
+  assert.equal(isSafeGitShowPath('src/a.ts'), true)
+  assert.equal(isSafeGitShowPath('a/b/c.txt'), true)
+  assert.equal(isSafeGitShowPath('.hidden'), true)
+  assert.equal(isSafeGitShowPath('a/./b'), true, 'dot segments are harmless')
+  assert.equal(isSafeGitShowPath(''), false)
+  assert.equal(isSafeGitShowPath(undefined), false)
+  assert.equal(isSafeGitShowPath('/etc/passwd'), false, 'absolute')
+  assert.equal(isSafeGitShowPath('../outside'), false)
+  assert.equal(isSafeGitShowPath('a/../b'), false, '.. escape mid-path')
+  assert.equal(isSafeGitShowPath('a/..'), false)
+  assert.equal(isSafeGitShowPath('..'), false)
+  assert.equal(isSafeGitShowPath('..\\outside'), false)
+  assert.equal(isSafeGitShowPath('a\\b'), false, 'backslash separators')
+  assert.equal(isSafeGitShowPath('a//b'), false, 'empty segments')
+})
+
+test('buildLogPage: hasMore = page full; cursor only then (host rule)', () => {
+  const full = Array.from({ length: 30 }, (_, i) => ({ hash: String(i) }))
+  const page = buildLogPage(full, 30, 'cursor-60')
+  assert.equal(page.hasMore, true)
+  assert.equal(page.cursor, 'cursor-60')
+  assert.equal(page.entries.length, 30)
+  const short = buildLogPage(full.slice(0, 17), 30, 'cursor-60')
+  assert.equal(short.hasMore, false, 'a short page ends the log')
+  assert.equal('cursor' in short, false, 'no next cursor without hasMore')
+  assert.equal(buildLogPage([], 30, 'x').hasMore, false)
 })

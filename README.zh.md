@@ -154,6 +154,11 @@ dsh plugin add dsh-remote            # 添加 bundle
 > （`gitSource` 槽位）——状态 / 历史 / stage / commit / checkout / fetch /
 > discard / revert / cherry-pick 每一步都是远端主机上的 `git -C …` 命令，
 > 与本地表面逐字节兼容；旧版侧边栏保持自己的本地 git 路由不变。
+> 历史区（v0.24.0+）走 **固定 roots + 不透明游标分页**（`gitLog`：`roots: []`
+> 钉住服务端自己的 HEAD tip，后续页只带响应游标——会话/仓库绑定，跨仓库或
+> 失效游标自动按服务端 tip 重新锚定），diff 视图的逐文件内容读取走 `gitShow`
+> （`git show <rev>:<path>`，`:0` 指 index），与宿主 `git.log` / `git.show`
+> 路由同形态；提交行的 refs 装饰为 `--decorate=short` 形态。
 >
 > **远程工作区 git 标记**：镜像工作区（`$DSH_HOME/remote-workspaces/…`，本地
 > 无 `.git`）的分支标记由 **dsh-remote 自己**取数并显示——explorer
