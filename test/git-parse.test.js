@@ -8,7 +8,7 @@ import {
   parseStatusV1, parseBranchHeader, parseWorktreeList, parseLogGraphLines,
   parseForEachRefPairs, parseLeftRightCount, countStatusLines,
   parseHeaderSync, buildWorkspaceMarker,
-  isLogRootHash, base64urlEncode, base64urlDecode, encodeLogCursor, decodeLogCursor,
+  isLogRootHash, logPagingGuard, base64urlEncode, base64urlDecode, encodeLogCursor, decodeLogCursor,
   isSafeGitShowPath, buildLogPage,
 } from '../lib/git-parse.js'
 
@@ -339,4 +339,23 @@ test('buildLogPage: hasMore = page full; cursor only then (host rule)', () => {
   assert.equal(short.hasMore, false, 'a short page ends the log')
   assert.equal('cursor' in short, false, 'no next cursor without hasMore')
   assert.equal(buildLogPage([], 30, 'x').hasMore, false)
+})
+
+test('logPagingGuard: absent twins are valid — anchor page and cursor ride (regression: every anchors request was rejected)', () => {
+  // The anchor page sends roots WITH NO cursor (roots: [] = pin the
+  // server's own HEAD tip) — the field validation must only fire on a
+  // PRESENT field, else every first page fails with
+  // "git log cursor must be a non-empty string" (observed in the field:
+  // the remote panel's history stayed empty after the fix deployed).
+  assert.equal(logPagingGuard([], undefined), null, 'anchor page: roots [] + no cursor')
+  assert.equal(logPagingGuard(['a'.repeat(40)], undefined), null, 'anchor page: explicit verified roots + no cursor')
+  // A cursor ride sends ONLY the cursor; roots is absent.
+  assert.equal(logPagingGuard(undefined, 'eyJ2IjoxfQ'), null, 'cursor ride: no roots')
+  // Legacy slide: neither field present.
+  assert.equal(logPagingGuard(undefined, undefined), null, 'legacy slide: neither field')
+  // Malformed PRESENT fields still fail.
+  assert.match(logPagingGuard('main', undefined), /roots must be an array/)
+  assert.match(logPagingGuard([42], undefined), /roots must be an array/)
+  assert.match(logPagingGuard([], ''), /cursor must be a non-empty string/)
+  assert.match(logPagingGuard([], 5), /cursor must be a non-empty string/)
 })
