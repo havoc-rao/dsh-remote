@@ -71,6 +71,7 @@ DSH 的 Web 界面刻意只监听 `127.0.0.1`（CLI 为安全拒绝 `--host 0.0.
 - **模型工具（20 个）** —— `rw_info`、`rw_connect`、`rw_pick_workspace`、`rw_list_dir`、`rw_stat`、`rw_read_file`（utf-8/gbk）、`rw_write_file`、`rw_edit`（字面替换 + mtime 乐观锁）、`rw_append`、`rw_mkdir`、`rw_remove`、`rw_move`、`rw_exec`、`rw_search`（POSIX 优先 rg/grep，否则 SFTP 遍历）、`rw_download`/`rw_upload`、`rw_forward`、`rw_sync`、`rw_push`、`rw_disconnect`。
 - **端口转发面板** —— 设置页或 `rw_forward` 创建/启停本地与反向隧道。
 - **侧栏远程编辑** —— 远程文件 tab 可编辑并保存到远端（mtime 乐观锁，远端被并发改动时返回 409 + 提示重新读取）。**v0.8.19** 起文件操作按会话绑定机器。目录树与文件视图按**内置文件侧 UI** 重构：VSCode 式 34px 行 + 缩进参考线、DSH 设计令牌（跟随深浅色主题）、悬停 **@文件** 引用胶囊（把本地镜像路径插入输入框）、符号链接徽标、DSH 风格右键菜单（下载到本地镜像 / 重命名 / 删除 / 新建目录）。
+- **远程终端（复用 better-sidebar 的 TerminalView）** —— 侧边栏「🖥 远程终端」标签页在远程主机上起**交互式 shell**。每个会话一条**独立 SSH 连接**（复用全部凭据 / 跳板机 / TOFU 主机指纹机制，`rw_exec` 池的连接重建不会杀掉终端）；Windows 主机自动进 Git Bash。UI 与交互完整复用 TerminalView：**块分隔线 + 悬停「添加到对话」**、选区浮窗、info bar（当前命令 + 远程 cwd）、断线重连横幅、主题 / 256 色调色板、字体偏好、可见性 re-fit。生命周期对齐本地终端语义：**关 tab** 立即杀 shell；**切会话**保留（park，shell 常驻）；**页面刷新**在重连宽限（默认 60s，`terminalReconnectGraceMs`）内重连到**同一条** shell 并回放转写；**shell 退出**自动重启（立即退出循环会被熔断，不再无限重连）。每一条提交的命令行都会写入审计日志。
 - **命令审计** —— `rw_exec`/写/删/移动/转发写入 `audit.log`；设置页显示最近 30 条。
 - **连接体检** —— 设置页「测试连接」按类别提示（认证 / 网络 / 主机指纹 / 超时）。
 - 当前 `user@host:/path` 会注入每次系统提示，让 Agent 明确自己的工作根。
@@ -90,13 +91,13 @@ dsh plugin add dsh-remote            # 添加 bundle
 改为可选，不再是依赖，也不会被自动挂载。这样 SSH 工具和设置页不再被某个侧边栏
 实现的版本/API 变化拖垮。
 
-> **远程会话下的侧栏文件面板（v0.8.12+）**：当侧边栏为 **v0.18.0+** 时，Files
-> 面板的文件树呈现**两个起点**——本地起点（会话 cwd，本地语义、搜索/上传/git 等
-> 能力全部保留）+ 远程起点（dsh-remote 经 `fileTreeSource` slot 的 `roots` 注入，
-> label 为远程工作区名，展开浏览直接走 `/dsh-remote/ls`）；远程起点的本地能力
-> （上传/下载/git/open-with/search）按 slot 契约降级关闭（缺省 off），本地起点
-> 永不被接管。侧边栏 v0.17 或该 slot 缺失时自动回退：v0.17 下为整树远程接管，
-> 更旧版本保持在本地源——树始终可用。
+> **远程会话下的侧栏文件面板（v0.8.12+）**：当侧边栏为 **v0.19.0+** 时，Files
+> 面板的树区呈现**上下双模块**——**上模块**是注入插槽（`fileTreeSection`），
+> dsh-remote 把自己的远程树组件（工具栏 / 目录树 / 右键操作 / 打开远程文件）
+> 直接塞进去；**下模块**是 better-sidebar 的本地树（本地语义、搜索/上传/git 等
+> 能力全部保留，永不被接管）。本地会话上模块完全不渲染，渲染路径与无插件时
+> 逐字节等价。侧边栏 v0.18 及更早自动回退：v0.18 为双起点（本地根 + 远程根）、
+> v0.17 为整树远程接管、更旧版本保持 🌐 远程文件 tab——树始终可用。
 
 > **要求 profile 的 pnpm linker 为 `hoisted`**（DSH profile 默认，
 > `pnpm-workspace.yaml` 里 `nodeLinker: hoisted`）。loader 从 profile 根解析
@@ -221,6 +222,8 @@ scripts/dev-run.sh --status    # 是否在运行
 | `shell` | string | `''` | 远程命令终端策略：`''`=自动检测（Windows 找 Git Bash）、`'git-bash'`=优先 Git Bash、`'native'`=不包装、其他=显式 bash.exe 路径（如 `C:\Program Files\Git\bin\bash.exe`） |
 | `commandTimeoutMs` | int | 20000 | 单条远程命令超时 |
 | `connectTimeoutMs` | int | 15000 | SSH 连接超时 |
+| `terminalMaxSessions` | int | 8 | 并发远程终端会话数上限 |
+| `terminalReconnectGraceMs` | int | 60000 | 远程终端失去连接后保留 shell 的宽限（park 帧可使会话无限期保留） |
 | `maxFileBytes` | int | 52428800 | 镜像同步时跳过超过该大小的文件（0=不设上限） |
 | `hostKeyMode` | string | `accept-new` | 主机指纹策略：`accept-new`（首次信任）、`verify`（拒绝未知主机）、`off`（跳过校验） |
 | `fileReference` | bool | `true` | 远程 `@` 补全：远程会话的 `@` 列出**远端**目录树（issue #39）；关闭则只有本地镜像 |

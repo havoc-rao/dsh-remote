@@ -50,6 +50,7 @@ Real capture (host scrubbed to a placeholder):
 - **Model tools** — 20 tools, all Windows/POSIX portable via SFTP: `rw_info`, `rw_connect` (with `save`), `rw_pick_workspace`, `rw_list_dir` (size+mtime), `rw_stat`, `rw_read_file` (encoding-aware: utf-8/gbk), `rw_write_file`, **`rw_edit`** (literal replace + mtime optimistic lock), `rw_append`, `rw_mkdir`, `rw_remove` (recursive, bounded), `rw_move`, `rw_exec` (pty/env), **`rw_search`** (SFTP tree walk — works on Windows too, honors ignore rules, context lines), `rw_download`/`rw_upload` (streaming fastGet/fastPut + size caps), **`rw_forward`** (SSH tunnels), `rw_sync`, `rw_push`, `rw_disconnect`.
 - **Port forwarding panel** — create/start/stop/remove **local** (`127.0.0.1:port → remote`) and **reverse** (`remote → local`) tunnels in the Settings page or via `rw_forward`; definitions persist, auto-restart on reconnect when enabled, all tunnels stop on disconnect.
 - **Sidebar remote editing** — the remote file tab is **editable**: click **编辑** → edit → **保存到远程** with an mtime optimistic lock (409 + "重新读取" on concurrent change). File ops are **session-bound** (v0.8.19): the explorer sends `sessionId` so two conversations on different hosts do not share the active-machine pool. The remote file views are **styled on the built-in file tree** — 34px rows with VSCode-style indent guides, DSH design tokens (light/dark follow the app), a hover **@-reference** pill that inserts the local mirror path into the composer, dimmed dotfiles, and a DSH-style context menu (下载到本地镜像 / 重命名 / 删除 / 新建目录); the explorer rows show file sizes.
+- **Remote terminal (reuses better-sidebar's TerminalView)** — a 「🖥 远程终端」tab starts an **interactive shell** on the remote host. Every session owns a **dedicated SSH connection** (same credentials / proxy jump / TOFU host-key machinery — `rw_exec` pool reconnects never kill terminals); Windows remotes land in Git Bash automatically. The whole TerminalView UI and interaction is reused: **block dividers + hover "add to conversation" pills**, the selection popup, the info bar (running command + remote cwd), the reconnect banner, themed 256-color palettes, font prefs, visibility re-fit. Lifecycle mirrors the local terminal: **closing the tab** kills the shell immediately; **switching sessions** parks it (kept alive indefinitely); a **page refresh** reattaches to the SAME shell within the reconnect grace (default 60s, `terminalReconnectGraceMs`) and replays the transcript tail; a **shell exit** auto-respawns (immediate-exit loops are fused, so the view never spins). Every submitted command line lands in the audit log.
 - **Command audit log** — every `rw_exec`/write/remove/move/forward is appended to `$DSH_HOME/remote-workspaces/audit.log` (time · user@host · op · exit code · command); the Settings page shows the last 30.
 - **Async long tasks** — `rw_sync`/`rw_push` with `async: true` return a `taskId`; progress/result/cancel via `/dsh-remote/task` (single-flight queue).
 - **Connection health** — a **「测试连接」** button validates host/user/key/password (with per-category error hints: auth / network / host key / timeout) before you save a machine; latency is cached on the machine record.
@@ -107,15 +108,16 @@ keeps the SSH tools and settings UI independent from a particular sidebar
 implementation.
 
 > **Sidebar explorer under remote sessions (v0.8.12+)**: with a sidebar
-> **v0.18.0+**, the Files panel's tree shows TWO starting points in a remote
-> session — the local cwd root (local semantics, search/upload/git all kept)
-> plus a remote root contributed by dsh-remote through the `fileTreeSource`
-> slot's `roots` (labelled with the remote workspace name; expansions run
-> against the LIVE remote `/dsh-remote/ls`). Local-only abilities on the
-> remote root degrade OFF per the slot contract (absent capabilities = off);
-> the local root is never taken over. With a v0.17 sidebar the fallback is
-> the full-tree remote takeover; older versions keep the local source — the
-> tree always works.
+> **v0.19.0+**, the Files panel's tree area becomes a DUAL MODULE stack — the
+> TOP module is an injection slot (`fileTreeSection`) where dsh-remote mounts
+> its own remote-tree component (toolbar / tree / context-menu ops /
+> open-remote-file); the BOTTOM module is better-sidebar's local tree (local
+> semantics, search/upload/git all kept, never taken over). Local sessions
+> render no top module — the rendering path is byte-identical to a
+> plugin-less setup. Older sidebars fall back automatically: v0.18 shows two
+> roots (local + remote) in one tree, v0.17 takes over the whole tree
+> remote-side, even older keep the 🌐 remote-file tab — the tree always
+> works.
 
 > **Upgrading from ≤0.8.6 with a standalone sidebar?** You may keep the
 > standalone `dsh-better-sidebar` bundle (any order) — 0.8.7+ no longer
@@ -258,6 +260,8 @@ and should be done only when you intend to release.
 | `shell` | string | `''` | remote command terminal strategy: `''`=auto-detect (Git Bash on Windows remotes), `'git-bash'`=prefer Git Bash, `'native'`=never wrap, anything else=explicit bash.exe path (e.g. `C:\Program Files\Git\bin\bash.exe`) |
 | `commandTimeoutMs` | int | 20000 | per remote command timeout |
 | `connectTimeoutMs` | int | 15000 | SSH connect timeout |
+| `terminalMaxSessions` | int | 8 | max concurrent remote terminal sessions |
+| `terminalReconnectGraceMs` | int | 60000 | how long an unattached terminal session survives before its shell is killed (park frames keep it alive indefinitely) |
 | `maxFileBytes` | int | 52428800 | skip mirroring/reading files larger than this (0 = no cap) |
 | `hostKeyMode` | string | `accept-new` | host-key policy: `accept-new` (TOFU), `verify` (reject unknown hosts), `off` (skip) |
 | `useAgent` | bool | `false` | authenticate via the OpenSSH agent (`SSH_AUTH_SOCK`) |

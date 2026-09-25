@@ -1,0 +1,4 @@
+# dsh-workspace-chain delegation records (task books, checkpoints, resume notes) are generated per delegation.
+# Everything under .dsh/ is generated output — keep it out of git status. Only this file itself stays tracked.
+*
+!.gitignore

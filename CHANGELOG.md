@@ -3,26 +3,53 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
-### 新增：侧栏 Files 面板文件树注入 —— fileTreeSource slot（multi-root 双起点）
+### 新增：远程终端 —— 复用 better-sidebar TerminalView 的 transport slot
 
-- **dsh-better-sidebar v0.18.0+ 多起点文件树**：远程会话下 Files 面板的树呈现
-  **两个起点**——本地起点（会话 cwd，本地语义、搜索/上传/git 等能力全保留，永不
-  被接管）+ 远程起点（dsh-remote 经 `ctx.betterSidebar.registerFileTreeProvider`
-  注册 provider 的 `roots()` 注入：label = 远程工作区名，`dir` = 会话解析出的远程
-  根，展开浏览全部走 `GET /dsh-remote/ls`）。本地会话保持单起点，渲染路径逐字节
-  不变。
-- **契约**：provider `{ id: 'dsh-remote', match, createSource, roots }`；
-  `roots(sessionId, cwd) → FileTreeProviderRoot[] | Promise<…>`
-  （`{ id, label, dir }`），空数组/解析失败 = 不贡献起点；远程起点的本地能力
-  （upload/download/git/openWith/search）未声明即降级关闭（缺省 off）。
-- **兼容回退**：侧边栏 v0.17 无 `roots` 语义 → 回退 v0.17 整树远程接管（`list()`
-  内建「本地镜像路径 → 远程路径」映射，双形式兼容）；更旧版本无 slot → 本地源，
-  树始终可用。feature 探测：`bs.features.includes('fileTreeSource')`。
+- **交互式远程 shell（「🖥 远程终端」tab）**：`rw_exec` 之外补齐“远程终端控制”
+  的最后一块 —— 持久交互式会话（全双工、resize、SIGINT、vim/top 全屏 TUI），
+  不再是“跑完拿输出”的一次性命令。
+- **复用 better-sidebar 的 TerminalView（零 UI 重复）**：dsh-better-sidebar
+  在 `TerminalView.tsx:612` 暴露 **TerminalTransport slot**（`transport` prop，
+  缺省 = 原本地 node-pty WS 行为逐字节不变）。dsh-remote 只注入逻辑层
+  （`RemoteTerminalTransport`），全部 UI/交互原样复用：块分隔线 + 悬停
+  「添加到对话」、选区浮窗、info bar（当前命令 + 远程 cwd）、断线重连横幅、
+  主题 / 256 色、字体偏好、可见性 re-fit。
+- **每会话一条独立 SSH 连接**（`SshPool.openPty`）：复用全部凭据 / 代理跳板 /
+  TOFU 主机指纹机制，但独立于 `rw_exec` 池 —— 池的 invalidate/重连不会杀掉
+  终端。Windows 主机自动进 Git Bash；起始 cwd 用会话远程路径（镜像反向映射）或
+  机器工作区。
+- **生命周期对齐本地终端**：关 tab 立即杀 shell；切会话 park（无限期保活）；
+  页面刷新在重连宽限（默认 60s）内重连同一条 shell 并回放转写尾部；shell 退出
+  自动重启，立即退出循环熔断（2 次内熔断，不再无限重连）。每条提交的命令行写入
+  审计日志；并发会话数有上限。
+- **Wire**：`/dsh-remote/ws/terminal`（`ctx.webServer.registerUpgrade`，loopback
+  + origin 信任围栏；`ws` 成为直接依赖）；下行原始输出 + `{type:'init'|'title'}`
+  帧，上行原始输入 + `{type:'resize'|'close'|'park'|'signal'}` 帧。
+- **配置**：`terminalMaxSessions`（默认 8）、`terminalReconnectGraceMs`
+  （默认 60000）。
+- 依赖方改动：dsh-better-sidebar 需带 terminal transport slot 的版本（v0.19+）。
+- 单元测试：`test/terminal.test.js`（11 例：init/排队输入/title+审计/resize/
+  park/宽限/重连回放/自动重启/熔断/配额/spawn 失败）。
+
+### 新增：侧栏 Files 面板文件树注入 —— fileTreeSection 上下双模块（v0.19 主路径）
+
+- **dsh-better-sidebar v0.19.0+ 上下双模块树区**：Files 面板的树区分**上模块**（
+  注入插槽，`registerFileTreeSection`）与**下模块**（better-sidebar 本地树，
+  原样保留）。远程会话下 dsh-remote 把自己的远程树组件
+  （`RemoteExplorerTab`：工具栏 / 目录树 / 右键操作 / 打开远程文件编辑）**直接
+  注入上模块**；下模块永远是本地的（不再注册 fileTreeSource provider → 无远程根、
+  无整树接管）。本地会话上模块不渲染，渲染路径与无插件时逐字节等价。
+- **契约**：`registerFileTreeSection({ id: 'dsh-remote:tree', match, render })`；
+  `match(sessionId, cwd)` = cwd 位于镜像根（`mirrorRoot` 同步判定）；
+  `render({ sessionId, cwd, ctx })` = `RemoteExplorerTab`。feature 探测：
+  `bs.features.includes('fileTreeSection')`。
+- **🌐 独立 tab 退役**（v0.19 下）：不再注册 explorer tab、不再 auto-open；远程
+  树的入口就是 Files 面板上区。
+- **分级兼容回退**：v0.18 `fileTreeSource` multi-root（本地根+远程根）→ v0.17
+  整树远程接管 → 更旧版本保持 🌐 tab。feature 分级自动选择，树始终可用。
 - **host 半**：`GET /dsh-remote/status` 增加 `mirrorRoot` 字段（本地镜像根，用于
-  同步判定远程会话）；client 半注册前先取回缓存，`roots`/`list` 共享会话远程根
-  TTL 缓存（10s），减少 resolve-mirror 往返。
-- 依赖方改动：dsh-better-sidebar **v0.18.0+**（`fileTreeSource` slot 的
-  multi-root 扩展）。
+  同步判定远程会话）；client 半注册前先取回缓存。
+- 依赖方改动：dsh-better-sidebar **v0.19.0+**（`fileTreeSection` 插槽）。
 
 ### 新增：侧栏 directory-flow 槽位 key —— cordis config 风格 + 装配期自动匹配
 
