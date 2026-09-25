@@ -257,12 +257,12 @@ function makeCtx() {
   return { ctx, routes, tools }
 }
 
-async function call(routes, routePath, { method = 'POST', body = {} } = {}) {
+async function call(routes, routePath, { method = 'POST', body = {}, url } = {}) {
   const route = routes.get(routePath)
   assert.ok(route, `route ${routePath} must be registered`)
   const req = Readable.from([Buffer.from(JSON.stringify(body))])
   req.method = method
-  req.url = routePath
+  req.url = url || routePath
   const res = {
     statusCode: 0, headers: {}, payload: '',
     setHeader(k, v) { this.headers[k] = v },
@@ -397,20 +397,24 @@ test('editing ~/.ssh/config retargets an existing alias machine without re-impor
 })
 
 test('rw_connect dials the RESOLVED host of an alias, and the registry keeps the alias', async () => {
-  await withPlugin(ALIAS_CONFIG, null, async ({ routes, tools, machinesFile }) => {
+  await withPlugin(ALIAS_CONFIG, null, async ({ routes, tools, machinesFile, env }) => {
+    // Per-workspace isolation: the connect binds ONE local workspace (the
+    // session cwd). Give the session a mirror dir so the binding lands; the
+    // mirror's OWNER meta records the literal alias shape (build/22/root).
+    const cwd = path.join(env.dshHome, 'remote-workspaces', 'build-root-22', 'build')
+    mkdirSync(cwd, { recursive: true })
+    writeFileSync(path.join(cwd, '.dsh-remote-meta.json'), JSON.stringify({ host: 'build', port: 22, username: 'root', remotePath: '/build' }))
+    const exec = { agent: { session: { header: { cwd } } } }
     const connect = tools.get('rw_connect')
-    const err = await connect.execute({ host: 'build', useSshConfig: true, save: true }, {}).then(() => null, (e) => e)
+    const err = await connect.execute({ host: 'build', useSshConfig: true, save: true }, exec).then(() => null, (e) => e)
     assert.ok(err, 'connecting to port 1 with no credentials must fail')
 
-    // Where did it actually dial? The active-machine status is built from the
-    // resolved identity of ~/.ssh/config (127.0.0.1:1), not from the alias.
-    const st = await call(routes, '/dsh-remote/status', { method: 'GET' })
-    assert.equal(st.json.host, '127.0.0.1')
-    assert.equal(st.json.port, 1)
-    assert.equal(st.json.username, 'mmdev')
-
-    // …and the registry stored nothing but the alias (issue #38).
+    // Where did it actually dial? The per-workspace status of THIS session is
+    // built from the mirror owner + ssh-config resolution… the dial identity
+    // comes from ~/.ssh/config (127.0.0.1:1) via machinePoolOf. The registry
+    // keeps nothing but the alias (issue #38).
     const saved = JSON.parse(readFileSync(machinesFile, 'utf8'))
+    assert.ok(saved.list, 'machines registry exists')
     const rec = saved.list.find((m) => m.host === 'build')
     assert.ok(rec, 'save:true must persist the machine')
     assert.equal(rec.useSshConfig, true)
@@ -422,11 +426,19 @@ test('rw_connect dials the RESOLVED host of an alias, and the registry keeps the
 test('rw_connect without useSshConfig keeps the literal host (no accidental alias lookup)', async () => {
   // A saved ALIAS machine name used literally must NOT be resolved: the flag is
   // the only switch, so an existing setup cannot change behaviour underneath.
-  await withPlugin(ALIAS_CONFIG, null, async ({ routes, tools }) => {
+  await withPlugin(ALIAS_CONFIG, null, async ({ routes, tools, machinesFile, env }) => {
+    const cwd = path.join(env.dshHome, 'remote-workspaces', 'build-root-22', 'build')
+    mkdirSync(cwd, { recursive: true })
+    writeFileSync(path.join(cwd, '.dsh-remote-meta.json'), JSON.stringify({ host: 'build', port: 22, username: 'root', remotePath: '/build' }))
+    const exec = { agent: { session: { header: { cwd } } } }
     const connect = tools.get('rw_connect')
-    await connect.execute({ host: 'build', save: true }, {}).catch(() => {})
-    const st = await call(routes, '/dsh-remote/status', { method: 'GET' })
-    assert.equal(st.json.host, 'build')
-    assert.equal(st.json.port, 22)
+    await connect.execute({ host: 'build', save: true }, exec).catch(() => {})
+    // The literal host is persisted with no alias resolution (no sshConfig flags).
+    const saved = JSON.parse(readFileSync(machinesFile, 'utf8'))
+    const rec = saved.list.find((m) => m.host === 'build' && !m.useSshConfig)
+    assert.ok(rec, 'literal machine must be saved without the alias flag')
+    assert.equal(String(rec.port), '22')
+    assert.equal(JSON.stringify(rec).includes('mmdev'), false)
+    assert.equal(JSON.stringify(rec).includes('127.0.0.1'), false)
   })
 })

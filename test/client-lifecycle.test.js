@@ -56,6 +56,11 @@ function dependencies(initial = []) {
 }
 
 function loadClient(protocol = 'https:', platform = 'Linux x86_64', slotConfig = {}) {
+  // Older call sites pass the slot-config probe response as the FIRST arg.
+  if (protocol && typeof protocol === 'object') {
+    slotConfig = protocol
+    protocol = 'https:'
+  }
   let plugin
   const requests = []
   // Effects are recorded (and run on demand by `runEffects`) so a component
@@ -229,8 +234,12 @@ for (const protocol of ['https:', 'dsh-app:']) {
     host.services.set('betterSidebar', bs)
     bs.emit('test-session')
     await new Promise((resolve) => setImmediate(resolve))
-    assert.equal(requests.length, 1)
-    assert.equal(requests[0].url, (protocol === 'dsh-app:' ? '/api' : '') + '/dsh-remote/resolve-mirror?sessionId=test-session')
+    // apply() additionally probes /dsh-remote/slot-config once (sidebar seat
+    // key resolution); every request must ride the chosen carrier prefix.
+    const prefix = protocol === 'dsh-app:' ? '/api' : ''
+    assert.ok(requests.length >= 2, 'slot-config probe + session resolve expected')
+    assert.ok(requests.every((r) => r.url.startsWith(prefix + '/dsh-remote/')), requests.map((r) => r.url).join(','))
+    assert.ok(requests.some((r) => r.url === prefix + '/dsh-remote/resolve-mirror?sessionId=test-session'))
   })
 }
 

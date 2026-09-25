@@ -78,21 +78,3 @@
           } catch (e) {}
           return {}
         })()
-    - id: dsh-remote-sidebar
-      name: 'dsh-better-sidebar'
-      disabled: !!js >-
-        (function () {
-          try {
-            const inc = ctx.loader && ctx.loader.resolve && ctx.loader.resolve('include')
-            const patches = inc && inc.subtree && inc.subtree.config && inc.subtree.config.patches
-            if (Array.isArray(patches)) {
-              for (const p of patches) {
-                if (!p || !Array.isArray(p.insert)) continue
-                for (const row of p.insert) {
-                  if (row && row.name === 'dsh-better-sidebar' && row.id !== 'dsh-remote-sidebar') return true
-                }
-              }
-            }
-          } catch (e) {}
-          return [...ctx.loader.entries()].some((e) => e.options.name === 'dsh-better-sidebar' && e.options.id !== 'dsh-remote-sidebar')
-        })()

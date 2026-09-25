@@ -137,14 +137,18 @@ test('POST /read|/write|/fs with a LOCAL sessionId refuse instead of using the a
   }
 })
 
-test('picker /ls without sessionId still uses the active-machine pool', async () => {
+test('picker /ls with ?machine=<id> drains THAT machine pool, not the shared one', async () => {
   const { home } = makeHome()
   try {
     const { routes } = await loadPlugin(home, { get: () => null })
-    const r = await call(routes, '/dsh-remote/ls', { url: '/dsh-remote/ls?path=/' })
-    // Active machine is m-win (127.0.0.22). No session hint → that host.
+    const r = await call(routes, '/dsh-remote/ls', { url: '/dsh-remote/ls?machine=' + encodeURIComponent('m-win') + '&path=/' })
+    // The picker machine is m-win (127.0.0.22). The connect attempt must name
+    // that host (reachable or not), never the empty shared config.
     const msg = JSON.stringify(r.json) + r.raw
     assert.match(msg, /127\.0\.0\.22/)
+    const unknown = await call(routes, '/dsh-remote/ls', { url: '/dsh-remote/ls?machine=nope&path=/' })
+    assert.equal(unknown.status, 404)
+    assert.match(String(unknown.json && unknown.json.error || ''), /not saved/)
   } finally {
     delete process.env.DSH_HOME
     rmSync(home, { recursive: true, force: true })

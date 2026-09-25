@@ -13,7 +13,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -163,7 +163,7 @@ test('a LOCAL session refuses instead of falling back to the active machine', as
       .then(() => null, (e) => String(e.message))
 
     assert.ok(err, 'a local session must not silently execute against a remote')
-    assert.match(err, /this session is LOCAL/)
+    assert.match(err, /no remote host active in THIS workspace/)
     // The refusal must not have attempted any host.
     assert.ok(!/127\.0\.0\.(11|22)/.test(err), `refusal must not touch a machine: ${err}`)
   } finally {
@@ -172,16 +172,23 @@ test('a LOCAL session refuses instead of falling back to the active machine', as
   }
 })
 
-test('a LOCAL session is refused even when the ACTIVE machine has a workspace', async () => {
+test('a LOCAL session is refused even when ANOTHER workspace picked a machine', async () => {
   const { home } = makeHome()
   try {
+    // Another workspace HAS a per-workspace selection (m-linux, mirror bound).
+    // A local cwd with no selection of its own must refuse — inheriting the
+    // other workspace's machine is exactly the leak this guards against.
+    const root = path.join(home, 'remote-workspaces')
+    const other = path.join(root, '127.0.0.11-lucas-1', 'proj')
+    mkdirSync(other, { recursive: true })
+    const machinesFile = path.join(root, 'machines.json')
+    const reg = JSON.parse(readFileSync(machinesFile, 'utf8'))
+    reg.workspaces = { [other]: { machineId: 'm-linux', workspace: '/home/lucas/proj', explicitNone: false } }
+    writeFileSync(machinesFile, JSON.stringify(reg, null, 2))
+
     const { apply } = await loadPlugin(home)
     const { ctx, tools } = makeCtx({ get: () => null, list: () => [] })
-    // The regression: the active machine carries a non-empty workspace, so a
-    // guard that only checks "is there a workspace?" passes and the local
-    // session inherits another session's machine. Every session-scoped tool
-    // must refuse on the SESSION's own binding instead.
-    await apply(ctx, { ...CONFIG, host: '127.0.0.22', username: 'Administrator', workspace: 'C:\\work\\tool' })
+    await apply(ctx, { ...CONFIG })
 
     const localCwd = '/root/some/local/repo'
     const cases = [
@@ -191,12 +198,14 @@ test('a LOCAL session is refused even when the ACTIVE machine has a workspace', 
       ['rw_move', { path: '/tmp/a', dest: '/tmp/b' }],
       ['rw_read_file', { path: '/etc/hostname' }],
       ['rw_list_dir', {}],
+      ['rw_sync', {}],
     ]
     for (const [name, args] of cases) {
       const err = await tools.get(name).execute(args, execFor(localCwd)).then(() => null, (e) => String(e.message))
       assert.ok(err, `${name} must refuse a local session`)
-      assert.match(err, /this session is LOCAL/, `${name} gave: ${err}`)
+      assert.match(err, /no remote host active in THIS workspace/, `${name} gave: ${err}`)
       assert.ok(!/ECONNREFUSED|ETIMEDOUT|handshake/i.test(err), `${name} must refuse BEFORE connecting: ${err}`)
+      assert.ok(!/127\.0\.0\.11/.test(err), `${name} must not reach another workspace's machine: ${err}`)
     }
   } finally {
     delete process.env.DSH_HOME
