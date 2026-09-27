@@ -12,7 +12,7 @@
 #   ./scripts/sync-profile.sh --clean    # 删除部署包（回到纯开发状态）
 #
 # 语义与 DCF 一致：
-#   - NODE_ENV=development（或 CODE_FINDER=1）才注入；未设 = 生产语义不注入；
+#   - NODE_ENV=development 才注入；未设 = 生产语义不注入；
 #   - 注入属性烘焙「仓库 lib/*.js 的绝对路径 + 源码行号」→ 点击打开仓库源码位置精确；
 #   - 幂等，可重复执行；仓库 lib/ 永不落注入。
 set -euo pipefail

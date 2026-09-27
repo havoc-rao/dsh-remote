@@ -45,8 +45,8 @@ NODE_ENV=development dsh electron  # 桌面壳（共享 web profile）
    `node_modules` 的目录隔离为 `.ignored_*` 并按 `link:` 规格重建符号链接。
    所以注入版必须放 `dev-harness/deploy-pkg`（gitignored），profile 依赖规格
    指向它——重装后链接目标依然是注入版（已验证）。
-3. **注入/挂载只认 dev 语义**：构建侧 `NODE_ENV=development`（或 `CODE_FINDER=1`）
-   才注入；运行侧宿主进程同样要求 `NODE_ENV=development` 才挂载 overlay
+3. **注入/挂载只认 dev 语义**：构建侧 `NODE_ENV=development` 才注入（env 层唯一语义，
+   enabled 参数是构建配置层覆盖）；运行侧宿主进程同样要求 `NODE_ENV=development` 才挂载 overlay
    （mount 行 disabled 读 `process.env.NODE_ENV`）——electron 从 Dock 图标启动
    不带终端 env，从终端 `NODE_ENV=development dsh electron` 启动。
 4. **改完源码必须重建 + 重启**：wire rev 在宿主启动时烘焙，client.js 字节变化
