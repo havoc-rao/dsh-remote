@@ -551,9 +551,10 @@ test('⑩ 端到端：vscode-tunnel 机器 → /dsh-remote/mirror 落 meta v2（
   const resolved = machineForMirror(entries[0], [add.body.machine])
   assert.equal(resolved.record.id, machineId1, 'machineForMirror 把 v2 镜像解析回原机器记录')
 
-  // ── 机器删除后：路由严格拒绝，绝不借占位 host/port/user 三元组猜其他隧道机器 ──
+  // ── 机器删除后：路由严格降级为「无标记」，绝不借占位 host/port/user 三元组猜其他隧道机器 ──
   // 第二台隧道机器与 m1 共享完全相同的占位三元组 —— 旧 machineByTarget 式宽松
-  // 查找会命中它；machineForMirror 按 machineId 判定必须拒绝。
+  // 查找会命中它；machineForMirror 按 machineId 判定必须拒绝（v2 占位三元组
+  // 相同是常态，孤儿镜像绝不能被洗成另一台隧道机器的 SSH 形记录）。
   const add2 = await callRoute(route, {
     action: 'add', name: 'e2e-mac-2', transport: 'vscode-tunnel', tunnel: { tunnelId: 'tid-e2e-2' },
   })
@@ -564,11 +565,15 @@ test('⑩ 端到端：vscode-tunnel 机器 → /dsh-remote/mirror 落 meta v2（
   assert.equal(del.status, 200, JSON.stringify(del.body))
   assert.equal(providerState.connectCount, 1, '删除本身不触发建连')
 
-  // ?local=（git-workspace local 分支，mirrorMatchOf → machineForMirror）→ 501，
-  // 措辞带 transport:machineId 新键而非占位 host:port。
+  // ?local=（git-workspace local 分支，mirrorMatchOf → machineForMirror）→ 200
+  // marker:null：机器删除后镜像成为孤儿（mirror 目录按设计保留在磁盘），
+  // marker 降级为「无」——与「非镜像本地路径」同语义，绝不报错。消费者
+  // （dsh-remote 自身与 dsh-enhanced-workspace 的浏览器半）探测所有工作区
+  // 与 session cwd，残留 cwd 落在孤儿镜像内时必须静默。
   const g1 = await callRoute(gitWsRoute, null, 'GET', '/dsh-remote/git-workspace?local=' + encodeURIComponent(localMirror))
-  assert.equal(g1.status, 501, JSON.stringify(g1.body))
-  assert.match(g1.body.error, new RegExp('owning machine vscode-tunnel:' + machineId1 + ' is not saved'), JSON.stringify(g1.body.error))
+  assert.equal(g1.status, 200, JSON.stringify(g1.body))
+  assert.equal(g1.body.ok, true, JSON.stringify(g1.body))
+  assert.equal(g1.body.marker, null, JSON.stringify(g1.body))
 
   // ?path=（routePoolOf）→ 500 cannot serve … not saved（沿用响亮失败语义）。
   const g2 = await callRoute(gitWsRoute, null, 'GET', '/dsh-remote/git-workspace?path=' + encodeURIComponent(remoteRoot))

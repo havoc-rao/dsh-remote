@@ -26,6 +26,24 @@ All notable changes to **dsh-remote**.
   非 loopback 拒绝（本次回归的镜像）、端口无关/端口精确匹配、`https://` 前缀等
   非裸权威条目不授权、origin 不匹配拒绝、`sec-fetch-site: cross-site` 拒绝、
   null/missing origin 维持原语义。
+### 修复：`git-workspace` 对「孤儿镜像」降级为 `marker:null`——删除机器/工作区后不再刷 501 警告
+- **现象**：侧栏工作区浏览器（组合 dsh-enhanced-workspace 的 profile）在挂载/窗口聚焦时
+  探测「所有工作区路径 + 所有 session cwd」的远端 git 标记。删除工作区或机器后，本地
+  mirror 目录（`~/.dsh/remote-workspaces/<host>-<user>-<port>/…` 及其
+  `.dsh-remote-meta.json`）**按设计保留在磁盘**（mirror 是远程树的本地工作副本，静默
+  删除会毁本地数据），`mirrorMatchOf` 仍能匹配该路径；而所属机器已不在注册表 →
+  `machineForMirror` 解析不到记录 → 路由返回 501（"owning machine … is not saved"）。
+  客户端虽按契约静默降级（`marker:null` 语义），但残留 session cwd 会在每次挂载/聚焦
+  触发探测，控制台反复刷 `git-workspace marker unavailable (HTTP 501)`。
+- **修复**（`lib/index.js` 的 `/dsh-remote/git-workspace` `?local=` 分支）：镜像存在但
+  所属机器未保存（机器已删除 / 从未保存）时，不再 501，而是与「非镜像本地路径」同语义
+  返回 `200 { ok: true, marker: null }`——孤儿镜像没有可展示的远端 git 状态，空标记。
+  无凭据/机器未保存等原有「响亮失败」语义在本路线的其余分支（`?path=` → 500
+  cannot serve … not saved）保持不变；v2 隧道镜像仍按稳定 machineId 严格解析，绝不借
+  占位 host/port/user 三元组误配其他隧道机器。
+- **测试**：`test/machines-transport.test.mjs` 机器删除用例改为断言 `200` +
+  `marker:null`（措辞不再含 transport:machineId 键），并保留「幽灵路径不触发任何新
+  connect」断言。
 ### 新增：远程 git 数据源对齐 sidebar main 契约——`gitLog` 固定 roots + 游标分页与 `gitShow`
 
 - **问题**：better-sidebar **main（v0.24.0，HEAD≈1db44fe）** 的 Git 面板调用的是新契约
