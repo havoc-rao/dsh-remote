@@ -3,6 +3,29 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 修复：终端 WS 升级信任圈对齐 harness webRuntime——非 loopback 权威网关下 term 不再「连接即断」
+- **现象**：通过受信的非 loopback 权威（公司网关 / 端口转发主机，页面 origin 如
+  `host: app`）访问 DSH GUI 时，远程终端一挂载就断——浏览器控制台只见
+  `WebSocket connection to 'ws://app/dsh-remote/ws/terminal?...' failed:`，后面没有
+  任何 HTTP 状态码。同一界面里除终端外一切正常（文件树 / 设置 / git 都工作）。
+- **根因**：终端 WS 升级是插件唯一一道 Host 围栏（`lib/index.js` 的
+  `trustedWsUpgrade`，随 429d30e 落地），且硬编码**只放行 loopback 权威**
+  （localhost / ::1 / 127.*）。宿主以非 loopback 权威服务时
+  （`webRuntime.trustedHosts` —— LAN IP + `--trusted-host` 条目，/api 网关与
+  better-sidebar 的围栏都认这份名单），这条升级路径在协商前就被
+  `socket.destroy()` 掐断——REST 路由没有 Host 围栏、/api 网关本就信任该权威，
+  于是**只有终端坏**，且错误没有状态码、无从排查。
+- **修复**：围栏迁至 `lib/upgrade-trust.js`，`trustedWsUpgrade(req, trustedHosts)`
+  新增受信列表参数——Host 为 loopback **或** 该列表命中（无端口条目匹配任意端口的
+  主机名，`host:port` 条目精确匹配，语义与 harness `/api` 网关的
+  `isTrustedAuthority` 对齐）即放行；`sec-fetch-site` / Origin 同源检查逐字保留。
+  列表每请求实时读取 `webRuntime.trustedHosts`（与 better-sidebar 同一信任源）；
+  无 `webRuntime` 的裸宿主回落到 loopback-only 历史默认，行为不变。顺带修了原
+  正则从未接受带括号 IPv6 loopback（`[::1]`）的遗留问题（仍属回环地址空间）。
+- **测试**：`test/upgrade-trust.test.js` 9 用例——loopback 放行、未声明受信列表的
+  非 loopback 拒绝（本次回归的镜像）、端口无关/端口精确匹配、`https://` 前缀等
+  非裸权威条目不授权、origin 不匹配拒绝、`sec-fetch-site: cross-site` 拒绝、
+  null/missing origin 维持原语义。
 ### 新增：远程 git 数据源对齐 sidebar main 契约——`gitLog` 固定 roots + 游标分页与 `gitShow`
 
 - **问题**：better-sidebar **main（v0.24.0，HEAD≈1db44fe）** 的 Git 面板调用的是新契约
