@@ -3,6 +3,26 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 修复：官方右侧栏指南页不再出现重复的「远程文件」胶囊（native 注册 + better-sidebar 桥接各一个）
+- **现象**：组合 dsh-better-sidebar ≥ v0.24（其 `registerNativeSurface` 把所有 service tab
+  镜像进官方 `sidebarRightTabs`）的 profile 里，右侧栏指南页稳定显示两个标题同为
+  「远程文件」的入口胶囊，重启 GUI 依旧：一个是 `dsh-remote/explorer` 原生注册
+  （`registerNativeSidebar`，kind `dsh-remote/explorer`），另一个是经 better-sidebar
+  桥接的旧版 🌐 explorer tab（`dsh-remote:explorer`，provider `dsh-better-sidebar:
+  dsh-remote:explorer`，guide 标题取描述符原样 = 同一 `explorer.tabTitle` 翻译）。
+  harness `sidebarRightTabs.register` 只按 `id` 判重（两 id 不同不抛错），GuideBody 按键
+  `[providerId, entry.id]` 渲染，于是两条并存。
+- **根因**：`registerSidebarIntegration` 在「官方原生侧栏存在、native explorer 已注册」
+  的环境里仍注册可见的 🌐 桥接 tab；better-sidebar v0.24 的原生表面把每个可见 tab 都
+  镜像成一条 guide 条目，形成同标题的第二胶囊（原先依赖的 `fileTreeSection` feature
+  当前 better-sidebar 从不宣告，退役分支永不生效）。
+- **修复**：桥接 🌐 explorer tab 仅在原生侧栏契约（`sidebarRightTabs` + `slots`）
+  或 better-sidebar 原生表面能力（服务含 `setSurface`）任一缺失时保持可见；否则注册为
+  `hidden: true` —— 注册仍在（`openTab`/auto-open 流程不受影响），但不进 legacy + 菜单、
+  也不再被镜像出 guide 条目。无官方侧栏 + 旧版 better-sidebar 的环境行为逐字节不变。
+- **验证**：构建后经 GUI 热重载（HMR rev 变更），无头浏览器实测指南页 DOM：
+  `data-sidebar-right-guide-entry` 从 `dsh-remote/explorer` + `dsh-remote:explorer` 两条
+  收敛为仅 `dsh-remote/explorer` 一条「远程文件」。
 ### 修复：终端 WS 升级信任圈对齐 harness webRuntime——非 loopback 权威网关下 term 不再「连接即断」
 - **现象**：通过受信的非 loopback 权威（公司网关 / 端口转发主机，页面 origin 如
   `host: app`）访问 DSH GUI 时，远程终端一挂载就断——浏览器控制台只见
