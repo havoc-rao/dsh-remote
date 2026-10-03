@@ -131,7 +131,7 @@ test('status and mirror resolution agree for local, live remote, historical and 
   fs.writeFileSync(path.join(dir, 'session.jsonl'), JSON.stringify({ cwd: mirror }) + '\n')
   const routes = new Map()
   const sessions = { get: (id) => id === 'remote' ? { header: { cwd: mirror } } : id === 'local' ? { header: { cwd: '/local/project' } } : null, list: () => [{ header: { cwd: mirror } }] }
-  await apply({ effect: () => {}, get: (name) => name === 'sessions' ? sessions : name === 'webServer' ? { register: (r) => { routes.set(r.path, r.handler); return () => {} } } : undefined, tools: { register: () => {} }, systemPrompt: { section: () => {} } }, {})
+  await apply({ inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) }, effect: () => {}, get: (name) => name === 'sessions' ? sessions : name === 'webServer' ? { register: (r) => { routes.set(r.path, r.handler); return () => {} } } : undefined, tools: { register: () => {} }, systemPrompt: { section: () => {} } }, { updateMode: 'off' })
   async function get(url) {
     let result
     const res = { setHeader: () => {}, writeHead: () => {}, end: (body) => { result = JSON.parse(body) } }

@@ -2,6 +2,550 @@
 
 All notable changes to **dsh-remote**.
 
+## 0.8.36 — 2026-10-03
+### 自动部署远端 dsh 并验证（体检 → 一键装 → 交给 AI 兜底）+ 新增 `rw_deploy_probe`
+
+接着上面的「远程 DSH 界面」：**连不上大多不是插件的问题，而是远端 dsh 版本或环境不对。**
+最典型的一种是这次真机踩到的——dsh 0.1.0-rc.6 依赖 `node-pty@1.1.0`，而**那个版本发布的包里
+没有 `linux-x64` 预编译产物**，于是 `dsh web` 在 Linux 上**根本起不来**
+（`Failed to load native module: pty.node`）。以前用户只会看到「没拿到启动令牌」，无从判断。
+现在分三层解决。
+
+**1）`体检（只读）`** —— 探测远端平台/架构、node/npm、现有 dsh 及版本、
+**原生模块能否启动**、是否认识 `--no-open`、代理变量、npm 源，并给出结论与修复建议。
+分级是 blocker/warn/info/ok，UI 原样渲染、不做二次判定。**严格只读**：不写、不装、不改，
+所以可以在用户还没同意任何事之前随便跑。刻意不用 `; ` 拼接语句（launch 命令被 `do;` 坑过一次），
+并由**真实 `sh -n` 的语法闸门**兜底 —— 这道闸门当场抓出了一个我自己写的 `||` 续行语法错。
+
+**2）`部署并验证`** —— 只在体检判定「需要且可以自动装」时出现，点击时明确告知会装到
+**私有目录**（默认 `$HOME/.dsh-remote/dsh`）：**不写系统目录、不改 PATH、不覆盖用户在用的版本**，
+删掉目录即完全回滚。装完**逐步校验**（二进制 / 原生模块 / `web` 子命令），成功后**按机器**
+记住这条 dsh 路径，之后连接自动使用。默认**不覆盖**远端 npm 源，所以内网镜像仍然生效。
+
+**3）`让 AI 排查`** —— 只在失败后出现，且**只有点击才创建会话**（会消耗模型额度，绝不自动）。
+它把体检结论、原始事实、真实报错**原样**交给内置的 `dsh-remote-deploy` 技能，覆盖确定性流程
+表达不了的长尾：没有 npm、要 sudo、代理、内网镜像源、Windows 远端、报错不匹配任何已知签名。
+技能正文把这次实测的坑写在最前面——`pty.node` 与 `--no-open` 两个失败签名、
+哪些报错**不是**部署问题（`NO_ADAPTER`/`no API key`/`QUOTA`）、以及一个会误导判断的
+符号链接陷阱：`dirname(dirname(realpath(.bin/dsh)))` 落在包**内部**、那里没有兄弟 `node-pty`，
+**好安装会被判成缺 pty**（这个 bug 就是我在真机上撞到并修的）。
+
+其余覆盖面：Windows 远端**有 Git Bash 即可部署**（`pool.exec` 会经 `bash -s` 执行，之前一律判不支持）；
+代理与自定义 registry 只**报告**不改；版本可配置（默认 `0.1.5-rc.2`，第一个 Linux 上能起 web 的版本）。
+
+新增配置：`webInstallPrefix` / `webInstallVersion` / `webInstallRegistry`。
+新增工具 **`rw_deploy_probe`**（只读环境体检，输出结论 + 原始事实 + 修复建议）——
+AI 排查时可以先拿到结构化结果，而不是自己拼命令猜。
+
+真机验证（编译机 9.134.186.191，从「坏的」状态开始）：体检精确复现手工定位的结论
+（0.1.0-rc.6 + pty=no ⇒ blocker 且给出修复版本）→ 安装 5/5 步通过 → 重新体检转为 ok 且选中新装命令
+→ **用自动装出来的 dsh 端到端起 web**（token 换取 303、SPA 200 且含 `__DSH_BOOT__`）。
+真实 GUI 里点「体检（只读）」也复现了同样的结论卡片与「部署并验证」按钮。
+
+**默认安装前缀必须由远端解析。** 修一个只有真机能发现的 bug：调用方在探测前用
+`resolvePrefix({home:''})` 猜了个 `/tmp/...`，于是报告的是**与真实安装位置无关**的目录可写性
+（那台机器的 `$HOME` 还是指向 `/data/...` 的符号链接）。现在默认前缀由远端 `$HOME` 解析并回报，
+只有用户显式配置 `webInstallPrefix` 才在本地拼绝对路径。
+
+测试：423 通过（原 316）。新增两处**平台无关但必要**的测试基建：
+`sh -n` 真实语法闸门（用 stdin 投喂——Windows 下 `bash -c` 会破坏内嵌双引号、把合法脚本
+误报成 EOF），以及 i18n 静态守卫（不允许「声明了却从未渲染」的字符串，
+这正是之前 token 警告文案悄悄没显示的原因）。
+
+### 安全修复 + 新能力：把远程机器的 DSH 网页界面挂到本机（issue #46）
+
+**issue #46 问的是「能连接远程的 dsh-web 吗？」，补一句「只当客户端用」—— 这句话决定了方向。**
+它排除"让远端把界面暴露出来给人连"，指向"让本地这个 DSH 主动连出去，把远端那个 `dsh web`
+当目标"。这与插件既有定位完全同构（本来就是把远程机器变成工作区），所以本次把「远程工作区」
+扩展成「远程界面」。
+
+**顺带发现并修掉一个真实安全缺陷（本身独立成立，且是新端点的前置条件）。**
+插件自己注册的 `/dsh-remote/*` 路由**完全没有 DSH 的 Host/Origin 栅栏，也没有浏览器认证** ——
+DSH 的 `requestRejection` 只挂在 `/api` 前缀与 `/api/remote.mux` 升级路由上。在 0.8.35 的实机
+（127.0.0.1:3080）实测：
+
+- `POST /dsh-remote/forwards` 带 `Origin: https://evil.example.com`（且用 `text/plain`，
+  浏览器**不会**发 preflight）返回 **200**，而且那个转发定义**真的落进了 `forwards.json`**；
+- `Host: evil.com` 也返回 200（DNS rebinding 根本不需要 Origin）；
+- `GET /dsh-remote/machines` 直接吐出 host/user/port/workspace。
+
+同样的请求打 DSH 自家的 `/api` 是 403。**能触发就能作恶**：任何用户访问过的网页都可以借此
+建隧道、改机器清单、甚至触发 `update-apply`（装包 + 重载插件）。
+
+修法是复用 DSH 的权威判定而不是另写一套：`lib/http-transport.js` 现在用 `guardRoute()`
+包住每一个 `webServer` 路由，优先问 `connection.requestRejection`，没有该服务时退回到
+**fail-closed** 的兜底（跨站 / Origin 与 Host 不符 / 非 loopback Host 一律拒绝）。
+非浏览器调用方（curl、脚本）与进程内调用方不受影响 —— 与 DSH 自己的语义一致；
+`/api` 那条孪生路由**刻意不重复包一层**。
+
+**新能力：`lib/web-attach.js`。** SSH 连出去，在选定机器上启动（或复用）一个**只监听
+127.0.0.1** 的 `dsh web`，再把它的端口经 SSH 隧道搬到本机的 loopback 端口。在一台真实
+Linux 主机上验证：**一个纯 TCP 转发就够了** —— SPA、静态资源、以及 `/api/remote.mux` 的
+WebSocket 升级（HTTP/1.1 101）全部正常通过，不需要反代、不需要改写 host。原因是 DSH 把
+认证 cookie 绑定在请求 authority 上，所以按 `127.0.0.1:<本地端口>` 签发的 cookie 正好就是
+浏览器随后发回同一 authority 的那一个。
+
+启动令牌**只存在于 stdout**（进程内 `randomBytes`，不落盘、无环境变量入口），所以解析
+`dsh web: http://127.0.0.1:<port>/?token=…` 这一行拿到它；`--port 0` 让远端自己挑端口，
+而同一行会把挑到的端口报回来，两者从同一行读出因而必然一致。默认**不会**杀远端进程，
+要用「断开并停止远端」，且只作用于本次由插件启动的进程。
+
+设置页新增「远程 DSH 界面」卡片：选机器 → 连接并打开 / 打开 / 断开 / 断开并停止远端，
+也可以粘贴远端已在运行的 `http://127.0.0.1:<端口>/?token=…` 直接接上（不会再启第二个）。
+
+**三个只有真机才能发现的缺陷**（单测全都"通过"了，实机第一次跑就露出来，各补了一条回归）：
+
+1. 语句用 `; ` 连接，而 `while …; do` 被当成独立元素 ⇒ 生成出 `do;`，POSIX 语法错误。
+   每次 attach 都失败在 `syntax error near unexpected token ';'`，而等价的手写脚本却是好的。
+   （`sh -c` 正是 sshd 执行命令的方式，所以必须是合法 POSIX sh。）
+2. `stopRemote` 实际什么都没做：它 `pkill -f` 会话日志路径，而那个路径只作为**重定向**出现、
+   从不进入 argv，所以匹配不到任何进程 —— 实机观察到远端 DSH 仍在监听。
+3. 给 (2) 打的第一版补丁改成匹配 argv 里的**端口**，同样永远不会命中：启动刻意用
+   `--port 0`，真实端口是事后才从启动行读到的。
+
+现在改为向记录的 PID 的**进程组**发信号（启动走 `setsid`，子进程即组长，组内正好是我们
+启动的那棵树 —— 不会误伤用户自己的 DSH，也不会误伤另一个 attach 会话），发信号前先用
+`/proc/<pid>/cmdline` 复核它仍然像个 `dsh` 进程，避免 PID 复用误杀；顺带清掉本次的日志文件。
+
+**测试**：346 通过（原 316）。新增 `test/route-fence.test.js`（12 例）做了负对照 ——
+把栅栏去掉后其中 7 例立刻变红，而 5 例"必须仍然可用"的对照保持绿色。
+`scripts/integration-web-attach.mjs`（10 项断言）与
+`scripts/integration-route-web-attach.mjs`（13 项断言）打真实主机，全绿。
+
+## 0.8.35 — 2026-10-02
+### 修 issue #44：`rw_search` 大目录搜索会把会话永久卡死；并入 PR #45 的 `rw_edit` 别名
+
+**issue #44 是真缺陷，报告人的根因分析逐条成立**，且比"跑得慢"更严重：不是慢，
+而是**逐条目等满超时定时器**，等效永久卡死。实测复现：SFTP 通道死掉后，每次
+`stat` 都要等满 `commandTimeoutMs`（默认 20s）才失败 —— 一条 `stat`+`readFile`
+就是 40s，数万条目 ≈ 天级，而 `session/cancel`、steer、timeout-policy 全部无效
+（DSH 的工具取消是**协作式**的：工具不响应 `exec.signal`，谁也叫不停它）。
+
+四处修复（对应报告的四点建议）：
+
+- **搜索可取消**（`lib/search.js`）：`searchTree` / `searchViaShell` 接收
+  `exec.signal`，在每个目录、每个条目检查；取消时**返回已扫到的部分结果**
+  并标 `CANCELLED`，而不是抛错丢掉进度。
+- **通道死了要立即失败**（`lib/pool.js`）：ssh2 的 SFTP 通道 EOF 时只清理
+  "当时挂起"的请求，之后新发的请求永远没有回调 —— 现在在 `end`/`close`/`error`
+  上标记通道已死，后续操作立刻以 `sftp channel closed` 拒绝。
+  另给 `c.sftp(cb)` 打开子通道本身加了超时（此前远端无响应会永久挂起）。
+- **搜索有预算上限**：新增配置 `searchTimeoutMs`（默认 60s）、
+  `searchMaxEntries`（默认 50000），也可用工具参数 `maxDurationMs`/`maxEntries`
+  覆盖；超限返回部分结果并标 `TRUNCATED`。
+- **工具声明 `timeoutMs`**：`rw_search` 现在把预算作为 `timeoutMs` 交给
+  `@deepseek-ai/dsh-tool-call-timeout-policy`，配合上面的取消支持才会真正生效
+  （该策略只能"请求"工具停止，工具不配合就等于没有）。
+- **默认跳过机器级缓存树**：搜索默认忽略 `~/.npm`、`~/.cache`、`~/.cargo` 等
+  （报告里点名的 `~/.npm/_cacache` 正是元凶）。**镜像同步的忽略集刻意不变** ——
+  静默把缓存目录移出同步会丢数据；显式传 `path` 仍可搜索任何位置。
+
+**防回归**：`test/search-cancel.test.js`（8 例）覆盖时间预算、abort 中途停止、
+已 abort 不产生任何 IO、取消后不回退到慢路径、死通道立即失败、打开子通道超时、
+以及"搜索忽略缓存但同步不忽略"。每条都做了**负对照**：去掉对应修复即变红
+（取消类 3 例失败且耗时升到 5-8s，正是失控遍历的特征）。
+
+### PR #45（@moesnow）已并入并扩展
+
+`rw_edit` 现在同时接受 `old`/`new` 与 `old_string`/`new_string` 两种拼写。
+PR 的论证经核实成立：宿主原生 `edit` 工具（`dsh-tool-fs`）声明的正是
+`file_path`/`old_string`/`new_string`，模型照抄这个习惯时会被
+`invalid arguments: missing required property "old"` 拒掉。
+
+并入时发现并补了两个缺口：
+
+- **补上 `file_path` 别名**。PR 只做了 `old_string`/`new_string`，但 `path` 仍
+  在 schema 里 `required` —— 于是模型若一并照抄原生拼写（`file_path`），依然被拒。
+  三个参数的 `required` 都从 schema 移到 resolver，别名才真正生效。
+- **修一个因放宽 schema 引入的回归**：`resolveRemoteArg` 对空路径会回退到
+  工作区根，所以仅去掉 `required` 会让"没给路径"的 `rw_edit` 静默改写工作区根。
+  现在先校验**原始参数**是否存在，再解析。
+
+**同时修了我上一轮引入的一个缺陷**：`test/docs-images.test.js` 依赖 Python +
+Pillow 做像素级检测，在没有 PIL 的环境（PR 作者的环境）会**误报失败**。
+现在探测不到 PIL 就 **skip** 并说明原因，有 PIL 时照常实跑。
+
+---
+
+## 0.8.34 — 2026-09-30
+### 主页也修同一类问题：DAU 不再显示 0，版本号不再显示「—」
+
+0.8.33 只修了看板，**主页漏了** —— 渲染线上主页时发现同样的两类问题：
+
+- **主页的 DAU 仍固定取"最近一个完整日"**，于是所有心跳都在今天时显示 `0`，
+  与同屏的累计装机自相矛盾。现已改为与看板一致的规则：取**最近一个有数据**的日。
+- **版本号显示 `—`**：主页直接请求 `registry.npmjs.org`，而该请求在浏览器里失败
+  （实测 `Failed to fetch`）。现在改为**优先读同源快照**（CI 已从 npm 拉到并落盘），
+  直连只在快照缺该字段时兜底 —— 这样 registry 被拦也不会留下空徽章。
+- `scripts/snapshot-stats.mjs` 增补 `npm.latest` 字段。注意它在 registry 不可达时为
+  `null`：本机因频繁查询撞到 **HTTP 429**（环境限流，非脚本问题 —— npm CLI 仍能取到）。
+  页面有"字段存在才写"的守卫，`null` 不会渲染成假版本；CI 的出口 IP 未被限流。
+- 提交前**还原了本机生成的快照**：我的限流运行把 `latest=null` 写进了数据文件，
+  而那份数据应由 CI 产出。
+
+## 0.8.33 — 2026-09-30
+### 用量看板：DAU 不再显示 0，npm 摘要不再粘连
+
+跑上线后的页面时实测发现两个真缺陷：
+
+- **DAU 显示 `0`，而同一屏的累计装机显示 `53`** —— 自相矛盾且误导。
+  根因：早先为了避免把"今天只过了一半"读成暴跌，DAU 卡片固定取**最近一个完整日**；
+  但当所有数据都落在今天时（新项目很常见），那一天的 0 就成了唯一可见的数字。
+  现在改为显示**最近一个有数据的日**，并且当它就是今天时明确标注
+  **「（进行中）」** —— 既不隐瞒也不假装是终值。
+- **npm 摘要三项糊成一片**：渲染成 `近一周 1,814近一月 8,2414 天为 npm 上报缺口`。
+  已拆成独立项并加分隔线。
+
+- 验证方式：本地起静态服务器用**真实 GitHub Pages 数据**渲染（`file://` 下
+  fetch 取不到同源 JSON，会显示 "—"，那是测试环境限制而非页面问题），
+  确认 DAU=53 且标注「进行中」、摘要为三个独立项、切 EN 后标注与表头同步切换。
+- 全量 `npm test` 269/269；`node check.mjs` 通过。
+
+## 0.8.32 — 2026-09-30
+### GitHub Pages 站点改为中文优先，并修掉站点里与代码不符的事实错误
+
+**中文优先**（与仓库首页切换为中文化的口径一致）：
+- 两个页面（插件主页 `/` 与用量看板 `/stats/`）现在**默认中文**。
+  中文写在 HTML 骨架里，不是靠脚本注入 —— 因此**禁用 JS 或首屏那一刻就是中文**，
+  不会闪英文（`<html lang="zh-CN">`）。
+- 右上角提供 **中文 / EN** 切换，选择存 `localStorage`；只有显式选过 EN 才用英文。
+- 图表内嵌文案（柱图 tooltip、分布表头、空态提示）也随语言切换重绘。
+
+**修掉两处站点的真错误**（站点等于第二份产品说明，会和代码漂移）：
+- **4 个工具名写错**：站点列的是 `rw_workspace` / `rw_list` / `rw_read` / `rw_write`，
+  而真实名字是 `rw_pick_workspace` / `rw_list_dir` / `rw_read_file` / `rw_write_file`
+  （以 `lib/index.js` 的 `defineTool` 为准）。用户照抄会直接失败。
+- **默认值写错**：站点写 `auditLog` 默认 `false`，真源是 `true`。
+  同时补上 `maxOutputChars`，并改为只列常用项 + 指回 README 的完整表（26 项）。
+
+**修复过程中撞出并修掉的一个真缺陷**：语言切换原本对**容器**也整体写
+`innerHTML`，把内部的 `data-zh` 子元素连同属性一起抹掉 —— 表现为"点一次 EN 后
+标题永久卡在英文，切不回来"。现在只重写**叶子节点**（内部不再含 `data-zh` 的
+元素），并顺带修好 `<h1>` 里 `<br>` 两侧文案粘连（"变成真正的DSH 工作区"）。
+
+- **新增 `test/docs-i18n.test.js`（7 例）**，把"中文优先"与"站点不得与代码矛盾"
+  变成机器判据：
+  1. 两个页面都声明 `lang="zh-CN"`；
+  2. 去掉 `<script>`/`<style>` 后**骨架本身**必须有足量中文（防"靠脚本注入中文"）；
+  3. `data-zh` / `data-en` 数量相等且**按序成对**（防切语言时配错句）；
+  4. `applyLang` 必须跳过含子 `data-zh` 的容器（守住上面那个真缺陷）；
+  5. 默认语言变量必须是 `'zh'`，只有显式存过 `'en'` 才切英文；
+  6. 站点文档里出现的每个 `rw_*` 都必须真实存在，且总数恰为 20；
+  7. 站点配置表里的默认值必须与 `Config` schema 一致（含常量解析，
+     如 `updateMode` → `DEFAULT_UPDATE_MODE` → `auto`）。
+  已用**负对照**验证：把 `rw_list_dir` 改回错名 ⇒ 立即变红；把默认语言改成 `en`
+  ⇒ 立即变红；恢复后全绿。
+
+- **测试**：全量 `npm test` **269/269**；`node check.mjs` 通过。
+
+## 0.8.31 — 2026-09-30
+### 补齐缺失的 GitHub Release，并加发布完整性检查
+
+- **补齐 7 个缺失的 Release**：`v0.8.24` ~ `v0.8.30` 此前只有 tag、没有 Release 页
+  （最早从 0.8.19 之后就断档，一直到这轮才发现）。每个 Release 都包含：
+  - 该版定位与**是否值得升级**的说明；
+  - **是否需要重启才生效**（0.8.24 之前不能热切换）；
+  - 升级命令、npm 版本页与完整变更记录链接；
+  - 行为变更与关键修复的显著标注（0.8.27 的默认值变更、0.8.29 的"插件整个消失"）。
+  `Latest` 标记已正确落到 `v0.8.30`。
+- **说明原因**：tag 与 Release 是两件事。用户从 Release 页判断"要不要升级"，
+  而 npm 上的版本、GitHub 上的 Release、代码里的 tag 会各自漂移——这次就是
+  tag 一直在打、Release 一直没建。
+- **新增 `scripts/check-releases.mjs`**：一条命令核对每个 tag 是否**同时**
+  有 GitHub Release 与可下载的 npm tarball，缺失即非零退出（可挂 CI）。
+  支持 `--all`（全量，默认只看最近 15 个）与 `--json`。
+  实测：41 个 tag 全部齐全；并用"查询不存在的版本"做负对照，确认它真的能报缺失。
+
+## 0.8.30 — 2026-09-30
+### README 更新，并把仓库首页切换为中文
+
+- **主 README 改为中文**：`README.md` = 中文（仓库首页），`README.en.md` = 英文。
+  GitHub 只把 `README.md` 当首页，所以"主语言"就是文件名本身。
+  用 `git mv` 重命名，历史保留；`README.zh.md` 留成**跳转占位**，
+  让 npm 页、博客、镜像等既有外链不至于 404（此前 npm 的 `readmeFilename`
+  恰好解析成 `README.zh.md`，也在 `package.json` 里显式钉为 `README.md`）。
+- **补两版缺失的内容**（对齐 `lib/index.js` 的 `Config` schema 与真实实现）：
+  - 配置表补 `passphrase`、`maxOutputChars`(200000)、
+    `updateMode`(`auto`)、`updateCheckIntervalMs`(6h)、`updateAutoReload`(true)；
+    并按 schema 补上 `useAgent` / `keyboardInteractive` / `proxy` / `autoPush` / `encoding`；
+  - 中文版补回原先缺失的「常见问题 / 排查」整节（英文版一直有）；
+  - 两版补「DSH 版本兼容性」小节，说明 0.8.29 为何把 peer 改成跨线区间、
+    以及"升级 DSH 后插件整个消失"这一现象的原因与修法。
+- **修正与代码不符的描述**：`rw_search` 实际是 **`rg` → `grep -R -E` → SFTP 遍历回退**
+  （英文版原写"SFTP tree walk"，中文版写"POSIX 优先"，只有后者对）；
+  `rw_edit`/`rw_remove`/`rw_forward`/`rw_download` 等条目补上真实行为与上限。
+- **删掉英文 README 里的一整段中文重复内容**：0.8.25 加遥测章节时误把中文版
+  也插进了 `README.md`（用 `<!--中文-->` 分隔），英文读者会看到重复段落、
+  两版也更容易漂移。现在每种语言只有一份、只在自己的文件里。
+- **贡献者名单补上 #43 的 @zhz1667**（该 PR 虽未直接合并，但它定位到
+  `evaluatePluginCompatibility()`，0.8.29 的修复建立在它之上）。
+
+- **新增 `test/readme-parity.test.js`（9 例）**：把两版必须一致的部分交给机器守，
+  不再靠人工同步。检查项：
+  1. 两版互指的语言切换行存在且不指向旧文件名；
+  2. `README.zh.md` 只能是跳转占位（防止它又长成第二份全文）；
+  3. 章节**按位置显式配对**（只比数量不够——把某节内容搬走仍会"各 14 节"）；
+  4. 两版配置表的键集合完全相同；
+  5. 配置表的每个键都**真实存在于 `Config` schema**（防文档发明配置项或留下幽灵行）；
+  6. 两版列出的 `rw_*` 工具集合相同且为 20 个；
+  7. 兼容性小节双语都在且都提到 0.8.29；
+  8. 遥测政策每种语言只出现一次（守住上面那个回归）。
+  已用负对照验证：故意让英文版漏掉一个配置键 ⇒ 测试立即变红。
+
+- **测试**：全量 `npm test` **262/262**；`node check.mjs` 通过。
+
+## 0.8.29 — 2026-09-30
+### 兼容 DSH 0.2.0-rc.2：peer 范围改为**同时**相容 0.1 与 0.2 两条线
+
+**问题（真实故障）**：DSH 在 profile 导入插件前会校验 `peerDependencies` 中所有
+`@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 声明，**任一条不匹配就在 boot 时整包丢弃**
+（没有设置页、没有 `rw_*` 工具）。判定谓词（已从 `@deepseek-ai/dsh-app-boot@0.2.0-rc.2`
+的实际代码与原样切出的判定函数验证）：
+
+```js
+semver.satisfies(runtimeVersion, range, { includePrerelease: true })
+```
+
+而 npm 上 `@deepseek-ai/dsh` 的 **`latest` 已经是 `0.2.0-rc.2`**，插件原先声明的
+`^0.1.0-rc.6` / `^0.1.2-rc.1` 在 0.x 上被 caret 锁死在 `<0.2.0` ⇒ **在 DSH 主线上一装就被丢弃**。
+感谢 @zhz1667 在 PR #43 报告并定位到 `evaluatePluginCompatibility()`。
+
+**为什么没有直接采用 PR #43 的改法**：它把 peer 全部提升到 `^0.2.0-rc.1`，
+这**只是把故障从 0.2 线挪到了 0.1 线**——`^0.2.x` 同样被 caret 锁死在 `[0.2.0, 0.3.0)`，
+于是所有仍在 0.1 线的安装（含作者本机 `0.1.5-rc.2`）会反过来被判不兼容、整包丢弃。
+用官方判定函数实测的对照：
+
+| 清单 | dsh 0.1.2-rc.1 | dsh 0.1.5-rc.2 | dsh 0.2.0-rc.1 | dsh 0.2.0-rc.2 |
+|---|---|---|---|---|
+| 改动前（`^0.1`） | ✅ | ✅ | ❌ 丢弃 | ❌ 丢弃 |
+| PR #43（`^0.2`） | ❌ 丢弃 | ❌ 丢弃 | ✅ | ✅ |
+| **本次（跨线区间）** | ✅ | ✅ | ✅ | ✅ |
+
+**本 PR 的改法**：peer 范围改为**跨线开区间** `>=0.1.0-rc.6 <0.3.0`
+（client 侧三条按各自原有下界为 `>=0.1.2-rc.1 <0.3.0`），同时容纳两条线，
+并在 `dsh.engines.dsh` 写上同样的边界（仅供人阅读——官方 README 明确
+"These checks use peer declarations, not `engines.dsh`"，它**不参与**判定）。
+
+- 保留全部原有下界：扩展下界时**不抬高**任何既有门槛，0.1 线用户不受影响。
+- 上界止于 0.3：0.3 未知，不盲目承诺（当前 `0.3.0-rc.1` 仍会被区间容纳，
+  这是 semver 预发布比较的既有语义，非本次承诺；有测试覆盖上界有效）。
+- `@deepseek-ai/cordis` 不是 `@deepseek-ai/dsh-*`，**不参与**该校验，保持 caret。
+- **`lib/` 一行未改**——本次只用 0.1 与 0.2 都存在的 API，无需适配。
+- 新增 `test/compat.test.js`（7 例）：范围不得使用 caret（0.x 上必然锁死一条线）、
+  必须同时有下界与上界、必须容纳两条线、原始下界必须仍在范围内、
+  上界必须拦住 0.3、`engines.dsh` 与 peer 一致、cordis 保持 caret。
+
+- **测试**：全量 `npm test` **253/253**；`node check.mjs` 通过。
+- 新增 devDependency `semver`（仅为复现 DSH 自己的判定谓词）。
+
+## 0.8.28 — 2026-09-30
+### 修 `isInstalledCopy` 的跨平台路径判断（0.8.27 CI 红）
+
+0.8.27 的"拒绝对非安装副本自更新"逻辑在 Linux CI 上误判：`isInstalledCopy`
+只按 `path.sep` 切分路径，于是在 Linux 上判断 Windows 风格路径时
+（`C:\...\node_modules\dsh-remote`）切不开，被判为"非安装副本"——本机 Windows
+全绿、CI 直接红（246 例 fail 1）。现在同时把 `\` 与 `/` 归一化，两种平台的
+路径都给出正确答案。
+
+- 教训同 `os.homedir()` 那一类：**跨平台判断不能依赖本机的 `path.sep`**，
+  这类缺陷只在另一种平台上暴露，必须让判定函数自身与分隔符无关。
+- 测试补充了 5 条路径用例（Windows/POSIX × 安装副本/源码检出 + CI 检出路径）。
+
+## 0.8.27 — 2026-09-30
+### 更新模式默认改为 `auto`（自动更新）
+
+**为什么现在才敢改默认**：`auto` 在 0.8.24 之前不可能是安全的默认值——那时更新只把文件写到磁盘、必须重启才生效，用户会处在"浏览器半是新版、宿主半是旧版"的错位状态且毫无提示。0.8.24 补上了宿主半热切换（以及关闭时的 `pendingReload` 提示），自动更新现在才真正落地生效。
+
+- **默认值**：`updateMode` 从 `manual` 改为 **`auto`**（加载时 + 每 6 小时检查并自动应用，随后热切换宿主半）。
+  三层优先级不变：**设置页持久化的 `update-mode` 文件 > profile 配置 > 默认值**。
+  想保持手动的人不受影响（设置页选一次 `manual` 即持久化），需要彻底关掉可设 `off`。
+- **默认值收敛到单一常量 `DEFAULT_UPDATE_MODE`**：`manual` 这个字面量原先散落在
+  三处（schema 默认、`/update-check` 响应、auto 开关判断）。改默认时漏掉任何一处
+  就会出现"schema 说 auto、实际行为还是 manual"的不一致——第一版改动就是这样漏了
+  两个 `|| 'manual'` 兜底。现在改默认只需改一行，并有测试钉住不得回退成字面量。
+- **新增防护：拒绝对非安装副本自更新**。实测依据：`selfDir()` 基于
+  `import.meta.url`，而 **Node 的 ESM 解析会对符号链接做 realpath**（已实测：经
+  symlink 导入时 `import.meta.url` 报的是 realpath）。于是以 `link:`/开发模式安装时
+  `selfDir()` 指向**用户的源码仓库**，`auto` 一旦落地就会用 npm 包覆盖源码
+  （丢改动、脏工作树）。现在 `applyUpdate` 在目录不在 `node_modules` 下时直接拒绝，
+  设置页也会明确提示原因。默认改成 `auto` 正是把这个风险从"手点才触发"放大成
+  "自动发生"，所以必须同时补上。
+- **修掉一个进程挂起**：`fetchLatestVersion` 的 8s 看门狗定时器没有 `unref`，
+  于是任何"挂载后即空闲"的进程都会被它拖住。实测表现：`upload.test.js` 因默认变
+  `auto` 而启动更新定时器，该测试的 `effect` 桩不保存 disposer 故定时器无法清理，
+  **`npm test` 直接超时 420s**。现在看门狗 `unref`，且所有调用真实 `apply()` 的测试
+  必须显式钉住 `updateMode`（有测试强制这一点）。
+
+- **测试**：新增 `test/update-default.test.js`（7 例：常量即默认、schema 用常量而非字面量、
+  无 `manual` 硬编码兜底、auto 开关读同一常量、设置页初始态、看门狗 unref、
+  所有挂载插件的测试都钉住 updateMode）+ 2 例安装副本判定与拒绝自更新。
+  全量 `npm test` **244/244**（6.8s，恢复正常）。
+- **验证**：真实沙箱启动后 `/dsh-remote/update-check` 返回
+  `updateMode:"auto"` 且 `selfUpdateAllowed:true`；并用同版本源实测 auto 的判定链与落地
+  （`auto would update? true` → 文件被替换 → 磁盘版本推进）。
+
+## 0.8.26 — 2026-09-30
+### 插件主页 + 实时用量看板（GitHub Pages）；修掉会污染统计的两处缺陷
+
+**Pages 站点**（`https://flymysql.github.io/dsh-remote/`，源目录切到 `/docs`）：
+- `docs/index.html` **插件主页**：hero + 实时计数（版本 / 周下载 / star / 日活）、能力卡片、
+  20 个 `rw_*` 工具面、界面截图、安装块（含"0.8.24 之前首次升级需重启一次"的提示）、
+  以及遥测与隐私表格。
+- `docs/stats/index.html` **用量看板**：DAU / WAU / MAU / 累计装机 KPI、逐日日活柱图、
+  npm 下载对照图、版本与平台分布。
+- 图表是**手写 SVG**：本仓库刻意零构建，为了一个看板引入图表库不划算。
+
+**架构上的硬约束（决定了不能"前端直连云端"）**：
+- GitHub Pages 是**完全公开**静态站 ⇒ 统计口令**绝不能进前端**；
+- CloudBase 的 HTTP 访问服务**不返回 CORS 头**，浏览器本来也直连不了 `/stats`。
+- 因此由 `scripts/snapshot-stats.mjs` 在 CI 里拉数据（口令放 GitHub Secrets），
+  写成同源的 `docs/data/{stats,history}.json` 给页面读；`.github/workflows/pages-data.yml`
+  每 6 小时刷新一次，且**只在数据真的变化时才 commit**（避免空提交噪声）。
+
+**顺手修掉两个会污染统计的真缺陷**（都是端到端验证时发现的）：
+1. **测试会往生产统计灌数据**：`upload.test.js` 调用真实 `apply()`，而 `apply()` 里有
+   `void sendHeartbeat(...)` ⇒ 跑一次 `npm test` 就在线上日活表写下假装机
+   （实测表现为"一台只跑过 Windows 的机器冒出两个 Linux 装机"）。现在端点可用
+   `DSH_REMOTE_HEARTBEAT_URL` 覆盖（仅接受 https），并由 `test/setup-telemetry-off.mjs`
+   通过 `--import` 在**任何业务代码加载前**重定向整个测试进程；另加一条断言，
+   一旦 URL 指回生产就失败。
+2. **延迟发送可能永远发不出去**：启动延迟定时器被 `unref()`，而 await 一个已 unref 的
+   定时器不会让事件循环保活 ⇒ 进程若无其他 pending 句柄会**直接退出**，心跳一次都发不出
+   （CI 每轮必现，本地因其它测试占着句柄而侥幸变绿）。延迟的目的是让发送成功，就必须留住进程。
+
+**看板刻意"暴露"而不是隐藏的数据质量问题**：
+- npm 的零值日画成灰色并标注为**上报缺口**（对照包零值日完全一致 ⇒ 管线缺口，非真实零使用）；
+- 今天的柱**压暗**表示"未完整"，且 DAU 卡片显示的是**最近一个完整日**，避免把半天读成暴跌；
+- 页面明确写出**版本覆盖偏差**（只有升级到含心跳版本的安装会上报 ⇒ 这些数字是下限，不是全部用户）。
+
+- **测试**：`npm test` 236/236；`node check.mjs` 通过。
+
+## 0.8.25 — 2026-09-30
+### 安装心跳：可测的真实日活（去重装机 / 在跑版本 / 平台分布）
+
+**背景**：到 0.8.24 为止，"有多少人在用"只能靠代理指标，而且都不成立——
+npm 下载量由**发版**驱动（活跃版本占近周 1955/2078、旧版本地板 ≤21），且日粒度存在
+**上报缺口**（dsh-remote 2026-09 的零值日为 09-03/07/08/15/29/30；用 dsh-better-sidebar
+与 dsh-vision-router 对照，**零值日完全相同** ⇒ 是 npm 管线缺口，不是真实零使用）；
+GitHub clone 里混着 CI 与爬虫。这些都无法回答"多少人真的在用、用的哪一版、在哪个平台"。
+
+- **新增每次启动一次的匿名心跳**（同安装最少间隔 6 小时），落库到 CloudBase：
+  `dsh_remote_hb_daily`（`_id = day:idHash`，每天每装机一条）+ `dsh_remote_hb_install`
+  （`_id = idHash`，装机量/留存）。**日活 = 当天文档数**，靠确定性 `_id` 天然幂等去重，
+  不用唯一索引以避免竞态。
+- **隐私边界（硬约束，写进 `lib/telemetry.js` 顶部注释与 README）**：
+  上报字段严格白名单 `{idHash, version, platform, arch, node}`；`idHash` 是
+  `HMAC-SHA256('dsh-remote/telemetry/v1', installId)[:32]`，**原始 installId 不离开本机**，
+  服务端无法与其他数据交叉关联。本插件能拿到 SSH 主机/路径/机器列表，这些**一律不上报**。
+  测试里有一条断言专门守"请求体不得包含原始 installId"。
+- **身份存放位置是刻意的**：`<DSH_HOME>/.dsh-remote-install-id`（**不是**插件目录）。
+  插件目录每次 pnpm 重装都被覆盖，放那里会让同一台机器每次升级都换身份，
+  把 1 个用户算成 N 个。进程内缓存**按身份文件路径分键**（同一进程出现第二个
+  DSH_HOME 时不会串号）——这条是测试抓出来的真 bug。
+- **心跳是尽力而为的旁路**：`void sendHeartbeat(...)`，不 await、不阻塞加载、
+  失败静默；失败时**回滚节流**，避免一次网络抖动让该身份静默 6 小时，
+  把"网络不可达"错记成"用户当天没来"。
+- **避开启动高峰**：首帧 fetch 会因 DSH 启动期并发初始化被饿死
+  （实测 5s 超时下稳定 `This operation was aborted`，只剩 250~520ms 的端点却发不出去），
+  故超时放宽到 15s 且首次发送延迟 3s —— 延迟是为了**让它成功**，不是为了让人等。
+- **新增 `scripts/stats.mjs`**：一条命令读出「逐日日活 + 累计装机 + 版本分布 + 平台分布」，
+  并在输出里直接写明口径提醒（只有装了含心跳版本的安装会上报 ⇒ 首发后前几周
+  日活会被系统性低估，应配合 npm/GitHub 做总量校准）。
+- **配置**：无开关，默认开启（按作者要求）。`updateAutoReload` 等既有配置不变。
+
+- **测试**：新增 `test/telemetry.test.js`（10 例：身份跨进程稳定/坏文件自愈/伪名不等于原始 id/
+  两安装伪名不同/字段白名单/失败静默且可重试/节流/启动延迟）。全量 `npm test` 234/234。
+  **真机端到端**：隔离沙箱启动真实 DSH → 云端出现该装机的行，且
+  `HMAC(salt, 本地 id)` 与云端 `idHash` **逐字节吻合**（证明上限就是伪名）。
+
+## 0.8.24 — 2026-09-30
+### 更新落地即生效：宿主半在线热切换 + 原子落盘 + 「已应用 vs 已加载」版本区分
+
+**背景**：`auto`/手动更新此前只把新文件写到磁盘，宿主半（`lib/index.js`：`rw_*` 工具、
+`/dsh-remote/*` 路由、SSH 池）要等下次启动 Harness 才生效 —— 而浏览器半（`lib/client.js`）
+会被 DSH 的 `client-hmr` 自动热替换。于是更新后 UI 是新版、工具还是旧版，两者长期错位。
+
+- **宿主半在线热切换（新增 `POST /dsh-remote/update-reload`，更新后默认自动执行）**：
+  `lib/update.js` 的 `reloadSelf()` 先清掉本包自身模块的 Node 缓存
+  （ESM `loadCache` + CJS `require.cache`），再 `_dispose()` 我们自己的 loader entry
+  （工具、路由、SSH 池随 fiber 一起回收），最后 `init()` 重新 import 磁盘上的新代码。
+  - **为什么必须自己清缓存**：ESM 按 URL 缓存模块，只用 `_dispose()+init()` 会拿到**旧模块对象**，
+    看起来"热更新成功"实际一行没换。已用真实 cordis Loader 的进程内 E2E 证明
+    （`scripts/hotswap-e2e.mjs`，9/9：改写磁盘模块 → 切换 → 运行中的代码确实变成新版本）。
+  - **Node 24 细节**：`loader.internal.loadCache` 是 `LoadCache extends SafeMap`，
+    `instanceof Map` 为 **false**，但 `Map.prototype.has/delete.call(loadCache, url)` 实测有效
+    （已实证），故用显式 `Map.prototype` 调用而不是 `loadCache.delete()`。
+  - **失败不致命**：切到坏模块会像启动失败一样**响亮报错**并保持进程存活；此时旧代码已 dispose，
+    需修好文件后重启（与"boot 到坏文件"同样的结局，不会静默跑半个插件）。
+- **原子落盘**：`applyUpdate` 从 `copyFileSync` 改为**临时文件 + `rename`**。
+  这不是洁癖 —— client 半每 500ms 被 `dsh-client-hmr` stat-poll 并按**内容哈希**重算 rev，
+  一次撕裂写会被当场 re-hash 并推给浏览器；且写一半的 `lib/index.js` 会让下次启动直接崩。
+  另：**逐文件跳过字节相同的文件**，所以重复 apply 同一版本不再无谓搅动 mtime。
+- **修正 `auto` 模式会反复重下同一个包**：`currentVersion` 原先在定时器闭包外只取一次，
+  成功更新后它仍停在旧版 ⇒ 每个 `updateCheckIntervalMs` 都重新下载并覆盖写一遍全部 lib 文件。
+  改为每轮取「磁盘版本 / 已加载版本」中较新者。
+- **`loaded` vs `disk` 版本区分**：新增 `LOADED_VERSION`（import 时快照）与 `diskVersion()`。
+  `/dsh-remote/update-check` 现在返回 `loaded` / `disk` / `pendingReload`，
+  `current` 保持为**运行中**版本（UI 兼容）。`readVersion()` 读的是磁盘，更新后它立刻显示新版，
+  此前会让设置页在成功后仍报"有新版本"。
+- **修正 `/dsh-remote/update-apply` 的 `from` 字段**：原先在 `applyUpdate()` **之后**取版本，
+  于是 `from === to`（永远显示 `0.8.24 → 0.8.24`）。现在 apply 前取。
+- **新增配置 `updateAutoReload`（默认 `true`）**：设为 `false` 时只落盘不热切，
+  由 `pendingReload` 提示用户重启。
+- **UI**：更新成功后延迟 2s 再复查（宿主半约 300ms 后才切换，立即复查会问到旧 fiber 而误报"仍有新版本"）；
+  新增 `pendingReload` 提示条；确认框与成功文案改为"在线热切换（不重启 Harness）"。
+
+- **测试**：新增 `test/update.test.js`（15 例：tarball 安装/版本不匹配拒绝/失败不落地/
+  原子写/幂等跳过/缓存清理/entry 重挂/失败降级）+ `scripts/hotswap-e2e.mjs`（真实 Loader 端到端）。
+  全量 `npm test` 224/224。
+
+## 0.8.23 — 2026-09-28
+### 性能修复：远程路径自动补全逐字符卡顿（issue #41，PR #42 by @GDWhisper）+ 机器身份硬化
+
+**issue #41 —— 在工作目录选择器里输入远程路径，每敲一个字符都重连一次 SSH**
+
+- **现象**：远程 tab 的路径输入框里补全每敲一个字符卡 0.5–2 秒，打字快了请求还会排队、
+  越打越慢；与目录条目多少关系不大，链路稍有延迟就非常明显。
+- **根因**：输入时每敲一个字符都会 `POST /dsh-remote/current`，而该路由会经
+  `applyActiveMachine → pool.setTarget` **无条件关闭 SSH 连接**并清空平台检测缓存
+  （`setTarget` 里 `this.close()` 是唯一的收尾分支）。于是每次按键的真实成本是
+  「重连 + 重新探测平台 + 重列同一目录」，而不是单纯查目录。
+- **修复（PR #42，@GDWhisper）**：三层，缺一不可。
+  1. **`SshPool.setTarget` 目标未变即空操作**：不再关闭活连接、不再清平台缓存。
+     调用方若因共享 config 已被就地改写而无法与自身比较，可传入**改动前的快照**
+     作为 diff 基线（`previous` 参数）—— 这是"切换机器必须断开旧连接"（issue #25
+     的错主机隐患）得以保留的关键。
+  2. **`setCurrent` 幂等**：同一台机器且已生效时，不重写注册表、不重读凭据、不重设池。
+     指纹在 `applyActiveMachine` 内部维护，因此开机恢复、`rw_connect save:true`、
+     `POST /current` 三条路径都不会漂移。
+  3. **选择器客户端缓存**：`POST /current` 只在**切换机器**时发（`ensureCurrent`，
+     并发调用共享同一个 in-flight promise，失败则 reject 而不是污染缓存）；
+     目录列表按 `(机器, 目录)` 做 30s TTL 缓存 + 同键并发合并（`fetchDirList`）；
+     过期的补全响应按序号丢弃，不会覆盖新输入；重新打开选择器整体重置。
+- **实测（真机 9.134.186.191:36000，真实 SSH/SFTP + 从 `lib/client.js` 提取的真实
+  选择器逻辑，非 mock）**：预热后**单字符补全 1099ms → 31ms**（**35 倍**），
+  每字符主机请求 **2 → 0**；重打同一路径 1146ms → 31ms、0 次请求。首次按键
+  （必然冷拨号）仍约 1.1s，之后同一目录内连续输入基本秒出。
+- **顺手修掉的两个正确性缺陷（同一 PR 自审）**：切换机器时 `applyMachine` 会**就地
+  改写共享 config**（`pool.config` 就是这个 config），于是与自身比较恒等、空操作恒成立、
+  机器切换后仍复用旧 SSH 客户端（错主机）；映射改为显式传改动前快照。另外
+  `invalidate()` 现在与 `close()` 一样触发 `onCloseHook`，避免转发管理器挂在已死客户端
+  上的 `close → stopAll()` 监听器把重新挂到新客户端的转发拆掉。
+- **机器身份硬化（0.8.23 补丁，合并后追加）**：PR #42 删掉了**每次按键**的
+  `POST /current`，而那正是「让 active pool 钉在选择器机器上」的机制；配合新的客户端
+  缓存，**缓存命中的重打字是零主机请求**，于是 commit 前没有任何东西重新应用选择器
+  机器，而 `/mirror` 不携带机器身份 ⇒ 会用**当时 active 的机器**建镜像。`/ls` 的
+  identity 回显挡不住这一点：缓存按 machine id 键控，命中时不校验任何东西。
+  真机复现：选择器显示 A 的目录树，外部「设为当前」切到 B 后提交，镜像 identity
+  变成 B。pre-0.8.23 因 commit 前总会重发 `/current` 而偶然掩盖。修法：`/mirror` 与
+  `/home` 接受**可选 `machineId`** 命名调用方所展示的机器，host 在**目录探测之前**
+  重新断言该机器；**未知 id 返回 404 拒绝**（静默回退到 active 本身就是危险）；
+  缺省 id 保持原语义，老客户端与设置页的 workspace 流程完全不受影响。
+  新增 `test/mirror-machine-identity.test.js`（4 种路由层顺序 + 客户端调用形状）。
+
+
+## Local fork changes
+
 ## Unreleased
 ### 修复：官方右侧栏指南页不再出现重复的「远程文件」胶囊（native 注册 + better-sidebar 桥接各一个）
 - **现象**：组合 dsh-better-sidebar ≥ v0.24（其 `registerNativeSurface` 把所有 service tab

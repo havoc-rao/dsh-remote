@@ -42,6 +42,7 @@ function makeCtx() {
   const disposers = []
   return {
     ctx: {
+      inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) },
       effect: (fn) => { disposers.push(fn); return () => {} },
       get: () => undefined,
       tools: { register: (t) => tools.set(t.name, t) },
@@ -177,7 +178,7 @@ async function runWith(fake, fn) {
 
 test('① 已注册 vscode-tunnel → machinePoolOf 返回 connect 的句柄（identity 透传、exec/sftp 兼容面可用，不连 SSH）', async () => {
   const fake = fakeProvider()
-  const machine = tunnelMachine()
+  const machine = tunnelMachine({ webAttachCommand: '/opt/workspace-dsh/bin/dsh' })
   const { home, cwd } = makeHome(machine)
   try {
     const { apply } = await loadPlugin(home)
@@ -213,6 +214,14 @@ test('① 已注册 vscode-tunnel → machinePoolOf 返回 connect 的句柄（i
     assert.equal(typeof h.exec, 'function')
     assert.equal(h.platform, 'unknown')
     assert.equal(h.client, null)
+    let probeCommand = ''
+    const originalExec = h.exec
+    h.exec = async (command) => { probeCommand = command; return originalExec(command) }
+    const probe = await runTool(tools, 'rw_deploy_probe', {}, cwd)
+    assert.ok(probe.ok, probe.error)
+    assert.match(probe.result.text, /remote: 127\.0\.0\.1/)
+    assert.ok(probeCommand.includes(machine.webAttachCommand), 'probe must use the workspace machine deployment command')
+    assert.equal(fake.state.connectCount, 1, 'probe must reuse this workspace provider pool')
   } finally {
     fake.dispose()
     delete process.env.DSH_HOME

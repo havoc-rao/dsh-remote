@@ -34,6 +34,7 @@ function makeClientCtx() {
       if (name === 'slots') {
         return {
           inject: (slot, fn) => { state.slots.push({ slot, fn }); return () => {} },
+          register: (definition, render) => { state.sections.push({ definition, render }); return () => {} },
           get: () => [],
         }
       }
@@ -93,10 +94,19 @@ test('lib/client.js registers through the module loader and its apply() runs', (
   const enKeys = Object.keys(dicts.en).sort()
   assert.deepEqual(enKeys, zhKeys, 'en must cover exactly the zh key set')
   const required = [
-    'settings.sshImport', 'settings.sshUseAlias', 'settings.sshCopyFields', 'settings.sshAliasHint',
+    'settings.sshImport', 'settings.sshAliasHint',
     'settings.useSshConfig', 'settings.useSshConfigHint', 'settings.sshResolvedTo',
-    'settings.sshResolvedNone', 'settings.sshResolvedWarn', 'settings.badgeSshConfig',
+    'settings.sshResolvedWarn', 'settings.badgeSshConfig',
   ]
   for (const key of required) assert.ok(dicts.zh[key], `missing zh key ${key}`)
   assert.ok(state.slots.length > 0, 'the client half must contribute at least one slot')
+  state.slots.find((s) => s.slot === 'settings.section').fn()
+  const page = state.sections.find((s) => s.definition.id === 'dsh-remote').render()
+  assert.doesNotThrow(() => page.type(page.props), 'settings page initial render')
+  const useState = React.useState
+  React.useState = (v) => useState(typeof v === 'boolean' ? true : v)
+  try {
+    assert.doesNotThrow(() => page.type(page.props), 'settings page with attach/deploy sections expanded')
+  } finally { React.useState = useState }
+
 })

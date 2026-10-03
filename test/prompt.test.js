@@ -45,12 +45,13 @@ async function setup(t) {
   let sectionText = null
   await apply(
     {
+      inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) },
       effect: () => {},
       get: () => undefined,
       systemPrompt: { section: (s) => { sectionText = s.text } },
       tools: { register: () => {} },
     },
-    { host: 'any17.devcloud.woa.com', port: 36000, username: 'root', commandTimeoutMs: 5000, connectTimeoutMs: 5000 },
+    { updateMode: 'off', host: 'any17.devcloud.woa.com', port: 36000, username: 'root', commandTimeoutMs: 5000, connectTimeoutMs: 5000 },
   )
   assert.ok(sectionText, 'system prompt section was registered')
   return { sectionText, mirrorDir }

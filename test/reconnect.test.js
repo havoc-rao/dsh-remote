@@ -39,6 +39,7 @@ function boot() {
     registerRoute: () => {},
   }
   const ctx = {
+    inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) },
     effect: (fn) => disposers.push(fn),
     get: (n) => (n === 'webServer' ? webServer : undefined),
     tools: { register: () => {} },

@@ -36,6 +36,7 @@ function makeCtx() {
   const tools = new Map()
   return {
     ctx: {
+      inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) },
       effect: () => {},
       get: () => undefined,
       tools: { register: (t) => tools.set(t.name, t) },

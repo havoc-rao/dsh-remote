@@ -1,4 +1,4 @@
-**English** · [中文](./README.zh.md)
+[English](./README.en.md) · **中文**
 
 ---
 
@@ -10,376 +10,312 @@
 [![license](https://img.shields.io/github/license/flymysql/dsh-remote)](LICENSE)
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-7a3ef3)](https://github.com/topics/dsh-plugin)
 
-Maintained by [@flymysql](https://github.com/flymysql) · [Blog](https://gitpull.cn) · [Discussions](https://github.com/flymysql/dsh-remote/discussions) · [Issues](https://github.com/flymysql/dsh-remote/issues) · [中文说明](./README.zh.md)
+由 [@flymysql](https://github.com/flymysql) 维护 · [主页](https://flymysql.github.io/dsh-remote/) · [用量统计](https://flymysql.github.io/dsh-remote/stats/) · [博客](https://gitpull.cn) · [讨论区](https://github.com/flymysql/dsh-remote/discussions) · [Issue](https://github.com/flymysql/dsh-remote/issues) · [English](./README.en.md)
 
-![dsh-remote — make any SSH machine a real DSH workspace](docs/cover.png)
+![dsh-remote —— 把任意 SSH 机器变成真正的 DSH 工作区](docs/cover.png)
 
-**Remote-work assistant for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).**
+**为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）打造的远程工作助手。**
 
-Manage several SSH machines, then pick a **remote workspace** (or a **local** one) and let the agent operate right there without leaving the harness — listing files, reading code, running builds & commands over the remote host, and keeping that remote directory mirrored into a real local workspace object.
+维护多台 SSH 机器，然后在「选择工作区」时选一个**远程工作区**（或**本地工作区**），Agent 就能在不离开 harness 的情况下直接操作——列文件、读代码、在远程主机上跑构建/命令，并把远程目录镜像成一个真实的本地工作区对象。
 
-The harness Web UI intentionally binds `127.0.0.1` (the CLI rejects `--host 0.0.0.0` for safety). This plugin goes the other way: **you connect out** to the machines you maintain, pick a workspace, and work in it through the normal DSH workspace + agent fs flows — no changes to `dsh-workspace` or the harness core.
+DSH 的 Web 界面刻意只监听 `127.0.0.1`（CLI 为安全拒绝 `--host 0.0.0.0`）。本插件反过来：**由你主动连出**到你维护的机器，选一个工作区，然后通过 DSH 原生的工作区 + 文件流来工作——**不改动 `dsh-workspace` 核心**。
 
-## Screen previews
+反过来也成立：**你可以把远端那台机器的 DSH 网页界面，当成本机浏览器里的一个页面打开**——同样不需要在远端开放任何端口（详见 [在本地打开远程机器上的 DSH 界面](#在本地打开远程机器上的-dsh-界面)）。连不上时还有**一键体检与部署**，它会替你把远端环境修好并验证。
 
-Settings → **远程工作区** — a multi-machine SSH registry (add / edit / delete / set-current, password stored locally):
+## 数据采集 / 遥测
 
-<img src="docs/ui-settings-panel.png" alt="dsh-remote settings — multi-machine registry (light theme, host scrubbed)" width="720"/>
+每次启动发送一次匿名心跳（同一安装最少间隔 6 小时），只用于统计用量：**去重日活、实际在跑的版本、平台分布**。npm 下载量由发版驱动、且含镜像与爬虫，GitHub clone 混有 CI，都回答不了这些。
 
-The native **"Add workspace" / "Select workspace"** flow — a centered modal, two tabs, opens on **本机 (local)**; switch to **远程 (remote)**:
+只发送 5 个字段：`idHash`（`HMAC-SHA256('dsh-remote/telemetry/v1', installId)` 的伪名）、`version`、`platform`、`arch`、`node`。**不发送**主机名、用户名、路径、IP、SSH 主机/端口/密钥、机器列表、会话内容。原始 `installId`（`<DSH_HOME>/.dsh-remote-install-id`）不离开本机，只传它的 HMAC。
 
-- **远程** — a **machine `<select>`**, a path field that **auto-prefills `/` and live-completes** directories (picking one immediately reveals its next level, OS/VSCode-style), plus a **浏览…** floating browser that fills the field without committing — you review, edit, then **设为远程工作区**.
+心跳是尽力而为的旁路：不阻塞加载，失败静默忽略。
 
-Real capture (host scrubbed to a placeholder):
+[实时用量看板](https://flymysql.github.io/dsh-remote/stats/) · [插件主页](https://flymysql.github.io/dsh-remote/)
 
-<img src="docs/ui-picker-panel.png" alt="dsh-remote workspace picker — real dialog; 本机 (local) tab; 远程 machine select + prefilled root path + autocomplete" width="720"/>
+## 界面预览
+
+**设置 → 远程工作区** —— 多机列表、高级配置（私钥/跳板机/agent）、连接体检、远程 DSH 界面、端口转发、审计日志、更新：
+
+<img src="docs/shots/settings-panel.png" alt="dsh-remote 设置页：机器列表、高级配置、远程 DSH 界面、体检与部署、端口转发、审计日志、更新" width="612"/>
+
+原生 **「Add workspace / 选择工作区」** 流程 —— 居中弹窗、两个 tab，默认落在「本机」；切到**「远程」**：
+
+<img src="docs/shots/picker-dialog.png" alt="选择工作目录弹窗的「远程」tab：机器下拉、最近工作区、浏览…、设为远程工作区" width="632"/>
+
+- 路径框实时补全；Windows 主机根级显示「此电脑」多盘视图；「浏览…」浮层选中只回填、不直接提交。
+- 确定后创建**真实本地镜像**并被 harness 收养，同时通过 SFTP 保持同步；所选工作区持久化到该机器。
 
 ---
 
-## Features
+## 功能
 
-- **Multi-machine SSH** — save any number of hosts (`host`/`port`/`user` + **private key** or **password**). Passwords are stored locally and never shown back in the UI. Switch with one click in Settings. Per-machine **passphrase / host-key mode / SSH agent / keyboard-interactive (OTP) / proxy jump (bastion)** and an **optional OS-keychain password** (`加密保存密码` — macOS Keychain / Windows DPAPI / Linux secret-tool).
-- **`~/.ssh/config` aliases (resolved live, never copied)** — a machine can be saved as just a **Host alias** (`useSshConfig`): hostname/user/port/key/jump host are read from `~/.ssh/config` **at every connect**, so editing that file takes effect immediately and there is nothing to re-import; the registry stores **no copy** of those values (the key stays a path reference, its content is never read). Full OpenSSH semantics: multi-alias `Host a b`, `*`/`?` wildcards, `!` negation, `Include` (globbed, relative to `~/.ssh`), trailing-`\` continuations and ssh_config(5)'s *first-obtained-value-wins*. In Settings, **Import from ~/.ssh/config** saves an alias in one click (or **Copy fields** materialises a normal machine), the alias list and machine rows show **alias → what it actually resolves to**, and anything the plugin cannot honour (`ProxyJump` with several hops, `ProxyCommand`) is surfaced as a warning instead of silently degrading.
-- **Two-tab workspace picker** (fills the native "Add workspace" flow):
-  - **本机 / Local** — opens the **native OS folder chooser** over the host (macOS `osascript` / Linux `zenity`→`kdialog` / **Windows `FolderBrowserDialog`**), or lets you type a local path → adopted directly as a normal DSH local workspace.
-  - **远程 / Remote** — the picker is a **centered modal**. Pick a **machine** → on Windows hosts the root shows a **"This PC" drive view** (`C:\`, `D:\`, `E:\`… instead of the Git Bash MSYS root) and the path field live **autocompletes** directories (accepts `C:\Users\…` or `/c/Users/…` — Windows paths are rewritten to the Git Bash form underneath); selecting a directory immediately lists its next level. A **浏览…** floating browser (Windows-aware breadcrumb `此电脑 / C:\ / Users / dev`, drive rows, size + mtime, dirs first, follows symlinks) fills the field without committing; the **回上一级** button works at any depth (even when the browser was opened at the path bar's value). **最近 workspaces** quick-pick, **`~` 主目录** shortcut and **新建目录** are one click away. On confirm it creates a **real local mirror** under `$DSH_HOME/remote-workspaces/<host>-<user>-<port>/<base>` that passes `fs.realpath` → the harness adopts it as a real workspace while dsh-remote keeps it synced over SFTP.
-- **Git Bash default terminal (Windows remotes)** — the remote platform is auto-detected (`cmd /c ver`, plus an `uname -s` MINGW/MSYS probe as fallback); on Windows the plugin locates Git Bash (`config.shell` can pin a path or `native` disables wrapping) and pipes every command to `bash -s` over the exec channel, so quoting/backslash escaping is never an issue regardless of the SSH default shell. `rw_exec` runs with a Git Bash cwd (`/c/Users/…` form). `/dsh-remote/status`, `rw_info` and the 测试连接 button report the detected platform + shell.
-- **Windows path auto-conversion** — typing `C:\Users\dev\project` (or `C:/…`, `/c/…`, `/C:/…`) is normalized underneath to the Git Bash form `/c/Users/dev/project` for shell commands, while workspaces are stored and shown Windows-style (`C:\Users\dev\project`). All model tools accept and report both forms; SFTP access uses the Win32-OpenSSH `/D:/…` form (see `toSftpPath`).
-- **Remote `@` completion (issue #39)** — in a remote session `@` lists the **remote** tree (read live over SFTP, not the local mirror): directories drill down, a slash-free query fuzzy-matches the whole tree, and candidates are **workspace-relative paths** (`@src/main.c`) exactly like a local session. The `rw_*` tools accept those relative paths and resolve them against the remote workspace root. The index is bounded (entries/directories/deadline + cache + failure breaker) and **falls back to the local mirror when the host is unreachable** — never a silent empty list. Local sessions are untouched.
-- **Bidirectional SFTP sync, conflict-aware** — `rw_sync` (remote → mirror) and `rw_push` (mirror → remote) are **three-way** (remote vs local vs last-synced snapshot): files changed on both sides are **reported as conflicts and never silently overwritten** (`force=true` overrides). Defaults are **depth 8 / 2000 files**; hitting a cap is reported as **`TRUNCATED`**. Both support **dry-run**, **background tasks**, and honor **gitignore-style ignore rules**.
-- **Model tools** — 20 tools, all Windows/POSIX portable via SFTP: `rw_info`, `rw_connect` (with `save`), `rw_pick_workspace`, `rw_list_dir` (size+mtime), `rw_stat`, `rw_read_file` (encoding-aware: utf-8/gbk), `rw_write_file`, **`rw_edit`** (literal replace + mtime optimistic lock), `rw_append`, `rw_mkdir`, `rw_remove` (recursive, bounded), `rw_move`, `rw_exec` (pty/env), **`rw_search`** (SFTP tree walk — works on Windows too, honors ignore rules, context lines), `rw_download`/`rw_upload` (streaming fastGet/fastPut + size caps), **`rw_forward`** (SSH tunnels), `rw_sync`, `rw_push`, `rw_disconnect`.
-- **Port forwarding panel** — create/start/stop/remove **local** (`127.0.0.1:port → remote`) and **reverse** (`remote → local`) tunnels in the Settings page or via `rw_forward`; definitions persist, auto-restart on reconnect when enabled, all tunnels stop on disconnect.
-- **Sidebar remote editing** — the better-sidebar remote file tab is now **editable**: click **编辑** → edit → **保存到远程** with an mtime optimistic lock (409 + "重新读取" on concurrent change). The explorer rows show file sizes and have a **right-click menu** (下载到本地镜像 / 重命名 / 删除 / 新建目录). The remote file views are **styled on the built-in file tree** — 34px rows with VSCode-style indent guides, DSH design tokens (light/dark follow the app), a hover **@-reference** pill that inserts a tagged `@remote:<path>` reference into the composer, dimmed dotfiles, and a DSH-style context menu.
-- **Remote terminal (default terminal-tab takeover)** — in remote sessions the sidebar "+" menu "Terminal" is an **interactive shell** on the remote host by default (needs dsh-better-sidebar's terminal-source slot; older hosts stay local; the separate 「🖥 远程终端」tab is gone). Every session owns a **dedicated SSH connection** (same credentials / proxy jump / TOFU host-key machinery — `rw_exec` pool reconnects never kill terminals); Windows remotes land in Git Bash automatically. The whole TerminalView UI and interaction is reused: **block dividers + hover "add to conversation" pills**, the selection popup, the info bar (running command + remote cwd), the reconnect banner, themed 256-color palettes, font prefs, visibility re-fit. Lifecycle mirrors the local terminal: **closing the tab** kills the shell immediately; **switching sessions** parks it (kept alive indefinitely); a **page refresh** reattaches to the SAME shell within the reconnect grace (default 60s, `terminalReconnectGraceMs`) and replays the transcript tail; a **shell exit** auto-respawns (immediate-exit loops are fused, so the view never spins). Every submitted command line lands in the audit log. **Terminal-tunnel extension point**: the terminal UI interaction chain (provider registration → TerminalView rendering) stays exclusively with this plugin, but the *concrete remote-term docking logic* (session-binding lookup, credentials, SSH/PTY, lifecycle) can be supplied by an external plugin (e.g. dsh-remote-workbench) through the client-side `dsh-remote.terminalTunnel` service — provided via `ctx.provide` in `apply`, consumers declare it with `ctx.inject` and call `registerTunnel({ id, match, createTransport })`. When a tunnel's `match` hits, `createTransport` is delegated to that implementation; otherwise the built-in mirror/machine path applies. `agent:`/`gb:` terminals are never taken over.
-- **Command audit log** — every `rw_exec`/write/remove/move/forward is appended to `$DSH_HOME/remote-workspaces/audit.log` (time · user@host · op · exit code · command); the Settings page shows the last 30.
-- **Async long tasks** — `rw_sync`/`rw_push` with `async: true` return a `taskId`; progress/result/cancel via `/dsh-remote/task` (single-flight queue).
-- **The session-header "open" button follows the workspace (host open-in-app target provider)** — that button opens the **session cwd**, and a remote session's cwd is a **local mirror directory**, so it only ever opened the mirror. dsh-remote now claims cwds inside its own mirrors and turns the button into **"open the real remote folder in a local editor over SSH"**: VS Code / Cursor / Insiders / Windsurf via `--remote ssh-remote+<host> <remote folder>`, Zed via `ssh://<host><remote folder>`; a session rooted in a mirror subdirectory opens that subdirectory. `<host>` is the `~/.ssh/config` **alias** matching the machine's host/port/user whenever one exists (only an alias carries a non-default port, IdentityFile and ProxyJump into the editor), `user@host` for a plain port-22 host, and — for Zed only — an inline `user@host:port`; when none of those exist the launch **fails with the Host snippet to add** instead of silently opening the local mirror. A plain local workspace is **never claimed**, so the button keeps its exact stock behaviour and appearance, and a host without the extension point is untouched. Editor CLIs are probed once per plugin life (install locations first, then PATH) and the workspace is only claimed when at least one remote-capable editor is installed — otherwise the button still opens the local mirror.
-- **Connection health** — a **「测试连接」** button validates host/user/key/password (with per-category error hints: auth / network / host key / timeout) before you save a machine; latency is cached on the machine record.
-- The active `user@host:/path` is injected into every system prompt (plus active forwards). Remote sessions also get explicit **path rules**: user-mentioned absolute paths (e.g. `/data/…`, `/home/…`, `C:\…`) are remote-only — the model must go straight to `rw_read_file` / `rw_list_dir` / `rw_search` instead of burning turns on local file lookups that can never succeed, and the local mirror is flagged as a possibly stale cache rather than the authoritative tree. The injection also documents the **`@`-reference protocol**: `@remote:/path` = host file (use `rw_*` only), `@local:/path` or an untagged mirror path = this machine (native tools); references the sidebar inserts are tagged `@remote:` automatically.
-- **No official `dsh-workspace` core is modified** — everything is delivered as a normal plugin (directory-flow holes filled by the client half at `priority -100`).
-- **Cross-platform remotes** — all file access is SFTP-protocol-level (no shell dependency), so Linux/macOS/Windows remotes all work for listing, reading, writing, searching and syncing.
-- **Host-key verification (TOFU)** — every SSH connect verifies the host key
-  (`hostKeyMode: accept-new`): first connect records it, a later CHANGE is rejected
-  as a possible man-in-the-middle. `verify` also refuses hosts never seen before;
-  `off` disables it. Stored at `$DSH_HOME/remote-workspaces/known_hosts.json`; reset
-  with `/remote forget-key`.
-- **Data lives under the harness home** — machines + mirrors follow `$DSH_HOME`; pre-0.6 data under `~/.dsh/remote-workspaces` is migrated automatically on first run.
+![核心能力总览 — 多机 SSH / 别名实时解析 / 双 tab 选择器 / 三路同步 / 远程 @ 补全 / 远端 DSH 界面挂到本机 / 体检与一键部署 / 安全审计 / 端口转发 / 侧栏编辑 / 自动更新，以及 21 个 rw_* 工具](docs/shots/features.png)
 
-## Install
+上图是能力总览；下面只列**上图没说清、但用起来需要知道**的部分。
 
-### Official Desktop compatibility (experimental, unreleased)
+其余要点：
 
-This branch adds a compatibility path for the **official**
-[DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness),
-tested against the `0.1.5-rc.2` Host transport. It does not replace the Harness
-core or require a listening Web server:
+- **21 个模型工具**（便于复制/检索）：`rw_info`、`rw_connect`、`rw_pick_workspace`、`rw_list_dir`、`rw_stat`、`rw_read_file`、`rw_write_file`、`rw_edit`、`rw_append`、`rw_mkdir`、`rw_remove`、`rw_move`、`rw_exec`、`rw_search`、`rw_download`、`rw_upload`、`rw_sync`、`rw_push`、`rw_forward`、`rw_disconnect`、`rw_deploy_probe`。
+- **把远端机器的 DSH 界面挂到本机**（`0.8.36+`）—— 不用在远端开任何端口：插件主动 SSH 连过去，在远端**只监听 `127.0.0.1`** 地起一个 `dsh web`，再把端口经隧道搬回本机的一个 loopback 端口。地址带一次性登录令牌，只在本机这次跳转里用一次。
+- **连不上时一键体检与部署**（`0.8.36+`）—— **连不上大多不是插件的问题，而是远端 dsh 的版本或环境不对**。体检（只读）会报出平台/node/npm/dsh 版本、**原生模块能否启动**、代理与 npm 源，并给出修复建议；「部署并验证」把它装到远端**私有目录**（不写系统目录、不改 PATH、不覆盖你在用的版本，删目录即回滚）并逐步校验。失败还能交给内置的 `dsh-remote-deploy` 技能排查。
+- **远端跨平台** —— 文件访问走 SFTP 协议层（不依赖 POSIX shell），Linux/macOS/Windows 远端都能列/读/写/搜索/同步。
+- **Windows 主机** —— 自动探测平台并定位 Git Bash，命令经 `bash -s` 走 stdin 执行，不受引号/反斜杠转义困扰（`config.shell` 可指定或设 `native` 关闭）；`C:\Users\dev` 与 `/c/Users/dev` 两种写法都接受。
+- **长任务异步化** —— `rw_sync`/`rw_push` 传 `async: true` 返回 `taskId`，可查询进度/结果/取消。
+- **数据跟随 Harness 根目录** —— 机器清单与镜像在 `$DSH_HOME/remote-workspaces`；0.6 之前的数据首次启动自动迁移。
+- **不改动 `dsh-workspace` 官方代码** —— 全部作为普通插件实现。
 
-- The SSH settings and directory picker use `/api/dsh-remote/*` over the
-  Desktop's `dsh-app:` carrier. Exact Fetch routes are registered on
-  `ctx.connection.fetch`; the carrier retains ownership of authentication.
-- A native **Remote Files** entry uses `sidebarRightTabs` and the keyed
-  `sidebar.right.pane.tab` seat. It reuses the existing explorer/editor and
-  gives remote files their own session-scoped resource addresses, rather than
-  sending remote paths to the local Files viewer.
-- `dsh-better-sidebar` is not bundled. Web hosts may install it separately;
-  official Desktop uses the native right-sidebar integration instead.
+## 安装
 
-Since **v0.8.19**, sidebar `/ls` `/read` `/write` `/fs` resolve the session's
-mirror binding (same path as `rw_*`) when the client sends `sessionId`. Two
-sessions on different hosts no longer share the active-machine pool for file
-ops. Host-side tests cover that routing plus the editor 409/re-read/save path.
+### DSH 版本兼容性
 
-Official Desktop's native file-tab GUI, failed/cancelled dialogs, non-macOS
-hosts, and a full legacy Web UI pass are still experimental. Desktop's package
-installer may also require an explicit policy for the optional `ssh2` /
-`cpu-features` build scripts. The isolated transport test disabled those
-optional scripts; this change does not loosen an application's build allowlist
-or automatically approve dependency scripts.
+同时支持 `0.1.x` 与 `0.2.x` 两条 DSH 线。DSH 会在导入 bundle **之前**校验所有 `@deepseek-ai/dsh-*` 的 peer 范围，**任一条不匹配就整包丢弃**（没有设置页、没有 `rw_*` 工具）：
 
-### Published Web bundle
-
-```bash
-dsh plugin add dsh-remote            # add the bundle
+```
+dsh: skipping profile bundle "dsh-remote": Error: Plugin dsh-remote@… is incompatible …
 ```
 
-Since **v0.8.18**, `dsh-remote` installs and mounts only itself. The Web sidebar
-([dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar)) is
-optional and is no longer a dependency or an automatically mounted row. This
-keeps the SSH tools and settings UI independent from a particular sidebar
-implementation.
+caret 在 `0.x` 上会锁死小版本线（`^0.1.x` 容不下 `0.2.x`，反之亦然），所以自 **0.8.29** 起改为跨线区间 `>=0.1.0-rc.6 <0.3.0`。**低于 0.8.29 请在升级 DSH 前先升级本插件**。
 
-> **Sidebar explorer under remote sessions (v0.8.12+)**: with a sidebar
-> **v0.19.0+**, the Files panel's tree area becomes a DUAL MODULE stack — the
-> TOP module is an injection slot (`fileTreeSection`) where dsh-remote mounts
-> its own remote-tree component (toolbar / tree / context-menu ops /
-> open-remote-file); the BOTTOM module is better-sidebar's local tree (local
-> semantics, search/upload/git all kept, never taken over). Local sessions
-> render no top module — the rendering path is byte-identical to a
-> plugin-less setup. Older sidebars fall back automatically: v0.18 shows two
-> roots (local + remote) in one tree, v0.17 takes over the whole tree
-> remote-side, even older keep the 🌐 remote-file tab — the tree always
-> works.
->
-> **@-reference on remote rows (sidebar v0.21.0+)**: the remote tree's
-> @-reference pill inserts a **tagged `@remote:<path>` reference** (v0.8.12+)
-> instead of a raw path, so the model always knows the file lives on the
-> remote host — see the injected "REFERENCES (@ protocol)" section. Older
-> sidebars skip the mapping and insert the path verbatim — unchanged
-> behavior.
+### 官方 Desktop 兼容适配（实验性）
 
-> **Upgrading from ≤0.8.6 with a standalone sidebar?** You may keep the
-> standalone `dsh-better-sidebar` bundle (any order) — 0.8.7+ no longer
-> crashes. Or remove it from `bundles` and let dsh-remote mount the embedded
-> copy (version ^0.17.1 — the newest npm release whose dependency tree
-> installs; the runtime profile provides newer slots through its own
-> sidebar link).
+对 [DeepSeek 官方 Desktop](https://github.com/deepseek-ai/deepseek-harness) 的适配（以 `0.1.5-rc.2` Host 协议验证，不修改 Harness 核心）：
 
-> **Remote git panel (sidebar v0.23.0+)**: with a sidebar **v0.23.0+**, the
-> Git panel, the explorer's git-status decorations and the diff tabs of
-> remote sessions are fed by the **remote repository** through the
-> `gitSource` slot — every operation (status / history / stage / commit /
-> checkout / fetch / discard / revert / cherry-pick) runs as a `git -C …`
-> command on the remote host, byte-compatible with the local surfaces.
-> The history lens (v0.24.0+) pages through **fixed-roots + opaque-cursor**
-> pagination (`gitLog`: `roots: []` pins the server's own HEAD tip, later
-> pages ride only the response cursor — bound to session/repository, with a
-> foreign/stale cursor re-anchoring on the server's tips), and the diff
-> views read per-file contents through `gitShow` (`git show <rev>:<path>`,
-> `:0` = index) — both mirroring the host's `git.log` / `git.show` routes;
-> commit-row refs are the `--decorate=short` form.
-> Older sidebars keep their own local git routes unchanged.
+- 经 `ctx.connection.fetch` 注册 `/api/dsh-remote/*`，由 Desktop 的 `dsh-app:` 通道承载，不启动 Web Server。
+- 经 `sidebarRightTabs` 提供原生「远程文件」入口，不把远端路径传给本地预览器。
+- `dsh-better-sidebar` 不再内置；官方 Desktop 用原生右侧栏，不需要它。
+
+已验证 Host 启动、IPC 请求、真实 SSH 的只读连接/列目录/读文件，以及双机会话路由（侧栏 `/ls` `/read` `/write` `/fs` 带 `sessionId` 时按会话选机）。原生文件 tab 的完整 GUI、失败/取消交互、非 macOS 宿主仍属实验性。Desktop 安装器可能需为 `ssh2` / `cpu-features` 可选构建脚本配置策略。
+
+### 已发布的 Web bundle
 
 ```bash
 dsh plugin add dsh-remote
-dsh plugin add dsh-better-sidebar
 ```
 
-When the standalone sidebar service is present, `dsh-remote` discovers it
-dynamically and registers its remote explorer/editor tabs. Without it, all
-`rw_*` tools, the settings UI, sync, audit log, and port forwarding continue to
-work. Official Desktop uses its native right-sidebar seats and does not need
-`dsh-better-sidebar`.
+自 **v0.8.18** 起只安装并挂载自身；Web 侧边栏（[dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar)）改为可选。需要 Web 版远程文件浏览/编辑时再单独装它；不装时 `rw_*` 工具、设置页、同步、审计与转发均照常工作。
 
-> **Remote workspace git markers**: mirror workspaces
-> (`$DSH_HOME/remote-workspaces/…`, whose local copy has no `.git`) get
-> their branch marker **from dsh-remote itself** — the explorer's "Remote
-> workspace" footer line and the "Recent workspaces" rows of the settings
-> page and the picker show a `⎇ branch` badge (hover reveals ahead / behind;
-> no dirty count on purpose). The data is one remote
-> `git status --porcelain -b` per workspace (`GET /dsh-remote/git-workspace`,
-> 5s cache); no sidebar version requirement.
+> **从 0.7.2–0.8.17 升级：** 内嵌侧边栏会消失，旧 profile 里 `id: dsh-remote-sidebar` 的覆盖可以删除。
 
-> **Upgrading from 0.7.2–0.8.17:** upgrading to 0.8.18 removes the embedded
-> sidebar dependency and mount. Install `dsh-better-sidebar` separately only if
-> you still want that Web UI. Any old profile override for
-> `id: dsh-remote-sidebar` can be removed because that row no longer exists.
+（或 `npm install dsh-remote`，再在 `cordis.patch.yml` 加 `- id: dsh-remote / name: dsh-remote`。）
 
-> **Requires the profile's pnpm linker to be `hoisted`** (the DSH profile
-> default, `nodeLinker: hoisted` in `pnpm-workspace.yaml`). The loader resolves
-> plugin packages from the profile root, so the sidebar must be reachable in
-> the top-level `node_modules`. If your `pnpm-workspace.yaml` was rewritten
-> without `nodeLinker: hoisted`, add it back (`nodeLinker: hoisted`) and run
-> `pnpm install` once — otherwise the embedded sidebar row fails with
-> `Cannot find package 'dsh-better-sidebar'`.
+## 快速上手
 
-(or `npm install dsh-remote` + add `- id: dsh-remote / name: dsh-remote` in `cordis.patch.yml`).
+1. **加一台机器** —— 设置 → 远程工作区 → 填 host/port/user + 密码或 key → 设为当前。
+   > **保存 ≠ 激活**：保存只是备用连接；只有「设为当前」（或 Agent 调 `rw_connect`）才进入会话的 remote context。
+2. **选工作区** —— 点侧边栏/会话的 **Add workspace**：
+   - **本机** → 系统文件夹选择（或手输路径）→ 本地工作区。宿主没有可用系统对话框时改用插件内置浏览器。
+   - **远程** → 选机器 → 浏览到远程目录（或输入 `/path`）→ 「设为远程工作区」⇒ 创建并收养本地镜像工作区。
+3. **让 Agent 工作** —— 当作普通工作区使用，例如 `rw_read_file` / `rw_write_file` / `rw_edit` / `rw_exec` / `rw_search` / `rw_sync` / `rw_push` / `rw_forward`（完整列表见上文）。
 
-## Quick start
+> **Remote context 是 session 级的**：只有当前 session 的工作区是某个远程镜像时，system prompt 才注入「Remote workspace」段落；普通本地 session 不受影响，模型也不会主动调 `rw_*`。
 
-1. **Add a machine** — Settings → 远程工作区 → add host/port/user + key or password → (optional) set it current.
-2. **Open a workspace** — click **Add workspace** in the sidebar / conversation:
-   - **本机** → system folder chooser (or type a local path) → local workspace.
-     On hosts without a usable OS dialog (DSH Desktop's browse backend, headless
-     SSH hosts without zenity/kdialog) the in-app directory browser pops up
-     instead — breadcrumbs, Windows drive switch, new-folder, pick-and-fill.
-   - **远程** → choose the machine → browse to a remote directory (or type `/path`) → "设为远程工作区" ⇒ a local mirror workspace is created and adopted.
-3. **Work with the agent** — treat it like any workspace:
-   - `rw_list_dir(path?)`/`rw_read_file` — inspect remote files
-   - `rw_write_file(path, content)` / `rw_edit(path, old, new)` — create / patch a remote file directly
-   - `rw_stat(path)` / `rw_mkdir(path)` / `rw_remove(path, recursive?)` / `rw_move(path, dest)` — manage remote paths
-   - `rw_search(pattern, path?)` — grep remote files (SFTP walk, Windows OK)
-   - `rw_exec(command, cwd?, pty?)` — run remote shell commands (defaults to the workspace dir)
-   - `rw_forward(listenPort, targetHost?, targetPort?)` — open an SSH tunnel
-   - `rw_sync(dryRun?/force?/async?)` / `rw_push(dryRun?/force?/async?)` — conflict-aware mirror pull/push
+## 在本地打开远程机器上的 DSH 界面
 
-## CLI defaults (optional)
+远程机器上那个 `dsh web` 也可以**当成本机的一个页面打开**（issue #46）。方向仍然是「本地主动连出去」：
 
-Provide a default machine in `cordis.patch.yml`:
+> **远端不需要开放任何端口**。DSH 刻意拒绝 `--host 0.0.0.0`（它会把远程代码执行能力暴露到网络上），
+> 所以正确的做法是由本机 SSH 连过去，在远端**只监听 127.0.0.1** 地起一个 `dsh web`，
+> 再把它的端口经 SSH 隧道搬回本机的一个 loopback 端口。
+
+用法：设置 → 远程工作区 → **「远程 DSH 界面」** → 选一台机器 → **连接并打开**。
+浏览器会新开一个标签页，显示的就是**那台远端机器**的完整 DSH 界面（聊天、工具树、设置都在）。
+
+- 界面地址形如 `http://127.0.0.1:3088/?token=…`。那个 token 是远端进程启动时打印的一次性凭据，
+  只在**本机**的这次跳转里用一次：DSH 会把它换成 30 天有效的签名 cookie 并跳转到干净的 `/`。
+  **请不要把这个带 token 的地址外发**。
+- 「断开」只关隧道，**不会**杀掉远端进程（它可能是你在别处也在用的实例）；
+  要连远端进程一起停，用「断开并停止远端」——它只会结束**本次由插件启动**的那个进程。
+- 若远端已经在跑一个界面（比如你自己在终端里起的），可以选机器后把它的
+  `http://127.0.0.1:<端口>/?token=…` 粘进输入框，点「连接已有实例」，插件不会再去启第二个。
+- 远端 `dsh` 不在 SSH 登录 PATH 时，用 `webAttachCommand` 指向它的绝对路径；
+  想让它别污染远端用户自己的会话/设置，用 `webAttachDshHome` 指一个临时目录。
+
+### 连不上？先体检，再一键部署
+
+**连不上大多不是插件的问题，而是远端 dsh 的版本或环境不对。** 最典型的一种：dsh 0.1.0-rc.6
+依赖 `node-pty@1.1.0`，而**那个版本发布的包里没有 `linux-x64` 预编译产物** ⇒ `dsh web`
+在 Linux 上根本起不来。这种情况以前只能看到「没拿到启动令牌」，无从判断。
+
+设置 → 远程工作区 → **「远端 dsh 体检与部署」**：
+
+1. **体检（只读）** —— 探测远端平台/node/npm/dsh 版本/**原生模块能否启动**/是否认识
+   `--no-open`/代理与 npm 源，给出结论与修复建议。**不写任何东西**，可以随便点。
+2. **部署并验证** —— 只在上一步判定「需要且可以自动装」时才出现。它会装到远端
+   **私有目录**（默认 `~/.dsh-remote/dsh`）：**不写系统目录、不改 PATH、不覆盖你在用的版本**，
+   删掉那个目录即完全回滚。装完逐步校验（二进制 / 原生模块 / `web` 子命令），
+   成功后**按机器记住**这条 dsh 路径，之后连接就用它。
+3. **让 AI 排查** —— 只在失败后出现。它会创建一个会话，让内置的 `dsh-remote-deploy`
+   技能去处理确定性流程覆盖不到的长尾（没有 npm、要 sudo、代理、内网镜像源、Windows 远端等）。
+   **只有你点它才会创建**，因为这会消耗模型额度。
+
+相关配置：`webInstallPrefix`（装哪，默认 `$HOME/.dsh-remote/dsh`）、
+`webInstallVersion`（装哪个版本，默认 `0.1.5-rc.2`——第一个在 Linux 上能起 web 的版本）、
+`webInstallRegistry`（npm 源；**留空则沿用远端自己的配置**，不会覆盖你的内网镜像）。
+
+## 可选：CLI 默认机
+
+可在 `cordis.patch.yml` 提供默认机：
 
 ```yaml
-# Example only — use values for your own machine.
+# 示例：请换成你自己的机器
 - id: dsh-remote
   name: dsh-remote
   config:
-    host: 203.0.113.10   # or your real host / hostname
+    host: 203.0.113.10   # 或你的真实主机 / hostname
     port: 22
     username: dev
     privateKeyPath: ~/.ssh/id_rsa
-    # or password: '…'
+    # 或用密码登录：
+    # password: '…'
     workspace: ~/project
 ```
 
-If `host` is empty the plugin starts disconnected and you configure machines in the UI.
+若 `host` 为空，插件启动时处于断开状态，在 UI 里配置机器即可。
 
-## CLI quick reference
+## 常用命令（安装 / 查看 / 启动）
 
-Installing and driving DSH may live in different shells, so both the `dsh` binary and the `npx` form are shown. Always tell DSH **which profile** to use with `--profile <name>` (usually `web`).
+DSH 的 `dsh` 可能不在某些 shell 的 PATH（比如 Windows PowerShell 里在某个仓库目录下），所以同时列出 `dsh` 与 `npx` 两种写法。操作都要用 `--profile <name>` 指定 profile（一般 `web`）：
 
 ```bash
-# install the bundle into a profile (npm is pulled by pnpm; recommended)
+# 安装（从 npm 拉到 profile）
 dsh plugin --profile web add dsh-remote
-# same but when `dsh` is not on PATH (e.g. Windows PowerShell inside a repo)
+# 同一效果：当 `dsh` 不在 PATH 时用 npx
 npx --yes @deepseek-ai/dsh plugin --profile web add dsh-remote
 
-# confirm it is installed wire
+# 确认已装
 dsh plugin --profile web list
 npx --yes @deepseek-ai/dsh plugin --profile web list
 
-# start the web surface (reload profile; the plugin activates on boot)
+# 启动 web 界面（重载 profile，新插件在启动时生效）
 dsh --profile web
-npx --yes @deepseek-ai/dsh --profile web   # http://127.0.0.1:3080
+npx --yes @deepseek-ai/dsh --profile web   # 访问 http://127.0.0.1:3080
 
-# use a local checkout instead of the npm version (dev iteration)
-npx --yes @deepseek-ai/dsh plugin --profile web add /path/to/dsh-remote
-npx --yes @deepseek-ai/dsh plugin --profile web remove dsh-remote   # back to release
+# 迭代用本地源码替换 npm 版（便于改 dsh 插件代码后即测）
+npx --yes @deepseek-ai/dsh plugin --profile web add D:/path/to/dsh-remote
+npx --yes @deepseek-ai/dsh plugin --profile web remove dsh-remote   # 恢复用发行版
 ```
 
-After a successful start, `Settings → 远程工作区` appears and the "Add workspace" flow gains the 本机 / 远程 tabs (screenshots above).
+启动成功后，设置 →「远程工作区」会出现；「Add workspace」流程会带「本机 / 远程」两个 tab（见上方效果图）。
 
-## Development (sandbox, not product)
+## 开发（沙箱优先，勿改产品）
 
-Two development shapes:
-
-- **Sandbox-first** (this section, needs the DSH Desktop app bundle): iterate
-  in the sandbox, never by hand-editing a product profile — the product profile
-  is re-managed by the plugin manager and reverts hand-deployed files on reinstall.
-- **Link-deployed · dynamic update** (profile points at this checkout, or a
-  materialized copy): `node scripts/build.mjs` builds locally and updates the
-  installed artifacts in place; the running dsh hot-swaps via HMR — no sandbox.
-
-**Full flow, runtime topology, verification steps and troubleshooting:
-[`docs/develop.md`](docs/develop.md).**
-
-Use the helper script:
+迭代一律在沙箱里做——手工改产品 profile 会被插件管理器在重装时还原：
 
 ```bash
-scripts/dev-run.sh --restart   # start / restart the isolated sandbox
-scripts/dev-run.sh --stop      # stop it
-scripts/dev-run.sh --status    # is it running?
+scripts/dev-run.sh --restart   # 启动 / 重启隔离沙箱
+scripts/dev-run.sh --stop      # 停止
+scripts/dev-run.sh --status    # 是否在运行
 ```
 
-- Runs its own DSH instance (`dev-harness/harness` inside this repo) with the
-  plugin copied in from `lib/` — it boots through the same `bin.js web --patch`
-  path as the desktop app, so the sandbox reproduces the product boot behavior.
-- The sandbox web UI serves on `http://127.0.0.1:50599` and the plugin routes
-  are live immediately (e.g. `GET /dsh-remote/machines`).
-- **Host-half changes** (`lib/index.js`) need a sandbox restart (`--restart`);
-  **client-half changes** (`lib/client.js`) need a page refresh.
-- Node ESM resolves dependencies from the importing file's real path, so the
-  script **copies** `lib/` (hardlink copy, `cp -al`) into the sandbox profile
-  instead of symlinking — a symlink breaks `@deepseek-ai/*` resolution.
-- Run `scripts/check.mjs` (static framework-constraint gate: command-name
-  regex, …) before every commit; `scripts/boot-smoke.sh` boots an isolated
-  instance to prove the plugin still starts.
-- Full rules live in `scripts/dev-standards.md` (command names, cordis service
-  access via `ctx.get()` only, optional framework services may never register,
-  verify third-party callback contracts against the real runtime, …).
+- 沙箱自带独立 DSH 实例（仓库内 `dev-harness/harness`），UI 在 `http://127.0.0.1:50599`。
+- **宿主半**（`lib/index.js`）改动需 `--restart`；**客户端半**（`lib/client.js`）改动刷新页面即可。
+- 脚本用**硬链接拷贝**把 `lib/` 放进沙箱而非软链——软链会破坏 `@deepseek-ai/*` 的解析。
+- 提交前跑 `node check.mjs`（框架约束闸门）与 `npm test`；`scripts/boot-smoke.sh` 证明插件仍能启动。
+- 完整规则见 `scripts/dev-standards.md`。
 
-Deploying to a product profile is a separate, explicit action (`./sync.sh`)
-and should be done only when you intend to release.
+部署到产品 profile 是单独的受控动作（`./sync.sh`），只在确定要发布时做。
 
-## Configuration
+## 配置
 
-| Key | Type | Default | Meaning |
+| 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `host` | string | `''` | default SSH host (else start disconnected) |
-| `port` | int | `22` | default SSH port |
-| `username` | string | `''` | default SSH user |
-| `password` | string | `''` | default SSH password (non-empty overrides key) |
-| `privateKeyPath` | string | `''` | private key path (used only when explicitly provided) |
-| `passphrase` | string | `''` | passphrase for an encrypted private key |
-| `workspace` | string | `''` | default remote workspace path |
-| `shell` | string | `''` | remote command terminal strategy: `''`=auto-detect (Git Bash on Windows remotes), `'git-bash'`=prefer Git Bash, `'native'`=never wrap, anything else=explicit bash.exe path (e.g. `C:\Program Files\Git\bin\bash.exe`) |
-| `commandTimeoutMs` | int | 20000 | per remote command timeout |
-| `connectTimeoutMs` | int | 15000 | SSH connect timeout |
-| `terminalMaxSessions` | int | 8 | max concurrent remote terminal sessions |
-| `terminalReconnectGraceMs` | int | 60000 | how long an unattached terminal session survives before its shell is killed (park frames keep it alive indefinitely) |
-| `maxFileBytes` | int | 52428800 | skip mirroring/reading files larger than this (0 = no cap) |
-| `hostKeyMode` | string | `accept-new` | host-key policy: `accept-new` (TOFU), `verify` (reject unknown hosts), `off` (skip) |
-| `useAgent` | bool | `false` | authenticate via the OpenSSH agent (`SSH_AUTH_SOCK`) |
-| `keyboardInteractive` | bool | `false` | allow keyboard-interactive auth (OTP/MFA) with the configured password |
-| `proxy` | object | — | jump host: `{ host, port?, username?, password?, privateKeyPath? }` |
-| `autoPush` | bool | `false` | auto-push edited mirror files back to the remote (watcher, debounced) |
-| `auditLog` | bool | `true` | append executed commands to `$DSH_HOME/remote-workspaces/audit.log` |
-| `encoding` | string | `utf-8` | text encoding for remote file reads/writes (e.g. `gbk`) |
-| `fileReference` | bool | `true` | remote `@` completion: in a remote session `@` lists the **remote** tree over SFTP (issue #39); off → only the local mirror |
-| `fileReferenceMaxResults` | int | `20` | max `@` candidates rendered for one query |
-| `fileReferenceMaxEntries` | int | `3000` | max entries retained in one remote workspace's `@` index |
-| `fileReferenceExcludedDirectories` | string[] | `[.git, node_modules, dist, build, out, coverage, target, .next, .nuxt, .turbo, .venv, __pycache__, .pytest_cache, .mypy_cache, .gradle]` | directory basenames the remote `@` traversal skips |
-| `fileReferenceTimeoutMs` | int | `4000` | wall-clock budget for one remote `@` index pass (on expiry the partial index answers rather than making the caret wait) |
-| `sidebarDirectoryFlowSlot` | string | `''` (auto) | sidebar directory-flow slot key for the remote workspace picker (DirPicker). Empty = auto-match (see below). |
+| `host` | string | `''` | 默认 SSH 主机（空=断开） |
+| `port` | int | `22` | 默认 SSH 端口 |
+| `username` | string | `''` | 默认 SSH 用户 |
+| `password` | string | `''` | 默认 SSH 密码（非空覆盖 key） |
+| `privateKeyPath` | string | `''` | 私钥路径（仅在显式提供时使用） |
+| `passphrase` | string | `''` | 加密私钥的 passphrase |
+| `workspace` | string | `''` | 默认远程工作区路径 |
+| `shell` | string | `''` | 远程命令终端策略：`''`=自动检测（Windows 找 Git Bash）、`'git-bash'`=优先 Git Bash、`'native'`=不包装、其他=显式 bash.exe 路径（如 `C:\Program Files\Git\bin\bash.exe`） |
+| `commandTimeoutMs` | int | 20000 | 单条远程命令超时 |
+| `connectTimeoutMs` | int | 15000 | SSH 连接超时 |
+| `maxOutputChars` | int | 200000 | 单条远程命令捕获的 stdout/stderr 上限 |
+| `maxFileBytes` | int | 52428800 | 镜像同步时跳过超过该大小的文件（0=不设上限） |
+| `hostKeyMode` | string | `accept-new` | 主机指纹策略：`accept-new`（首次信任）、`verify`（拒绝未知主机）、`off`（跳过校验） |
+| `useAgent` | bool | `false` | 用 OpenSSH agent（`SSH_AUTH_SOCK`）认证 |
+| `keyboardInteractive` | bool | `false` | 允许 keyboard-interactive 认证（OTP/MFA）并复用配置的密码 |
+| `proxy` | object | — | 跳板机：`{ host, port?, username?, password?, privateKeyPath? }` |
+| `autoPush` | bool | `false` | 镜像内文件被编辑后自动推回远端（watcher，带防抖） |
+| `auditLog` | bool | `true` | 把执行的命令追加到 `$DSH_HOME/remote-workspaces/audit.log` |
+| `encoding` | string | `utf-8` | 远程文件读写的文本编码（如 `gbk`） |
+| `fileReference` | bool | `true` | 远程 `@` 补全：远程会话的 `@` 列出**远端**目录树（issue #39）；关闭则只有本地镜像 |
+| `fileReferenceMaxResults` | int | `20` | 一次 `@` 查询最多返回多少候选 |
+| `fileReferenceMaxEntries` | int | `3000` | 一棵远程工作区索引最多保留多少条目 |
+| `fileReferenceExcludedDirectories` | string[] | `[.git, node_modules, dist, build, out, coverage, target, .next, .nuxt, .turbo, .venv, __pycache__, .pytest_cache, .mypy_cache, .gradle]` | 远程 `@` 遍历跳过的目录名 |
+| `fileReferenceTimeoutMs` | int | `4000` | 一次远程索引遍历的墙钟预算（超时用已扫到的部分结果，不让光标等） |
+| `searchTimeoutMs` | int | `60000` | `rw_search` 的协作式预算（ms）：既作为工具声明的 `timeoutMs` 交给 DSH 的 timeout-policy，也是搜索自身的墙钟上限；到点返回部分结果并标 `TRUNCATED`（issue #44）。 |
+| `searchMaxEntries` | int | `50000` | `rw_search` 在返回部分结果前最多扫描多少个文件。 |
+| `updateMode` | string | `auto` | 自更新模式：`auto`=加载时及每 6 小时检查并自动应用、`manual`=仅在手动检查时查、`off`=完全不查。**0.8.27 起默认 `auto`**——之所以现在才安全，是因为 0.8.24 补上了宿主半热切换 |
+| `updateCheckIntervalMs` | int | 21600000（6h） | `auto` 模式检查 npm 的间隔（下限 60000） |
+| `updateAutoReload` | bool | `true` | 更新落地后自动热切换宿主半；`false` 则留到下次启动，设置页会显示 `pendingReload` |
+| `webAttachPortStart` | int | `3088` | 「远程 DSH 界面」在本机监听的起始端口（占用则顺延，仅监听 127.0.0.1） |
+| `webAttachCommand` | string | `dsh` | 在远端启动 `dsh web` 用的命令；远端 `dsh` 不在 SSH 登录 PATH 时改这里 |
+| `webAttachDshHome` | string | `''` | 远端启动时导出的 `DSH_HOME`；留空则复用远端用户自己的 harness home |
+| `webAttachWaitSeconds` | int | `45` | 等待远端 `dsh web` 打印启动令牌的秒数 |
+| `webInstallPrefix` | string | `''` | 自动部署装到远端的哪个目录；留空用 `$HOME/.dsh-remote/dsh`（不写系统目录、不改 PATH） |
+| `webInstallVersion` | string | `0.1.5-rc.2` | 自动部署安装的 dsh 版本；默认值是第一个在 Linux 上能启动 web 的版本 |
+| `webInstallRegistry` | string | `''` | 安装用的 npm 源；**留空沿用远端自己的配置**，不会覆盖内网镜像 |
 
-**`sidebarDirectoryFlowSlot` — auto-matched sidebar directory-flow slot key**: the *sidebar* registration of the remote workspace directory picker (DirPicker) uses this slot key; the hero registration always stays on the official `conversation.hero.workspace.directoryFlow`. Empty (default) = the host picks the effective key at assembly time, in this order:
+> 权威清单是 `lib/index.js` 里的 `Config` schema，本表与之一致。
 
-1. an explicit `sidebarDirectoryFlowSlot` config (a static `config` patch in your profile layer **replaces the whole config field**, so it naturally overrides the auto match below);
-2. the auto-match expression in dsh-remote's own `cordis.patch.yml` (`config: !!js` scanning the composed patch stack for a `dsh-enhanced-workspace` row);
-3. a host runtime fallback probe over `ctx.loader.entries()`;
-4. the official default `sidebar.workspaces.directoryFlow`.
+## 常见问题 / 排查
 
-Why: dsh-enhanced-workspace shadows `sidebar.workspaces` at priority -1, which leaves the official sub-slot `sidebar.workspaces.directoryFlow` *registered-but-never-rendered*; its own hole `enhanced-workspace.workspace.directoryFlow` (same flowOwner contract) is used instead when that plugin is mounted. Installing/uninstalling dsh-enhanced-workspace therefore follows automatically — no build-time flag, no env, nothing to bake (the old `DSH_REMOTE_SIDEBAR_DIRECTORY_FLOW_SLOT` build-time baking mechanism is gone). The value is delivered to the browser half over `GET /dsh-remote/slot-config` at client assembly; if that read fails, the client falls back to the official key. Changes take effect on the next host restart (config is evaluated at assembly; dev-mode HMR may apply patch edits live).
+**`@` 能列出远程文件，但内置读文件工具打不开** —— harness 自带工具看到的是**本地镜像**，要等 `rw_sync` 下载后才有内容。读远程文件请用 `rw_read_file` 或侧栏远程文件 tab。
 
-Explicit override example — `cordis.patch.yml` of your profile (`~/.dsh/profiles/<name>/cordis.patch.yml`, or `$DSH_HOME/cordis.patch.yml` for every profile):
+**主机指纹变了** —— `/remote forget-key`（或设置页 → 机器 → 重新信任）。
 
-```yaml
-- id: dsh-remote
-  name: 'dsh-remote'
-  config:
-    sidebarDirectoryFlowSlot: enhanced-workspace.workspace.directoryFlow
-```
+**连接报「认证失败」** —— 检查用户名/密码/私钥路径；加密私钥要填 Passphrase；需要动态码时勾选 keyboard-interactive。
 
-## FAQ / troubleshooting
+**连不上内网机器** —— 填「跳板机」主机（也可先把跳板机本身配成一台机器）。
 
-**`@` lists remote files but the built-in read tool cannot open them** — the harness's own file tools see the session's **local mirror** (`$DSH_HOME/remote-workspaces/…`), which stays empty until `rw_sync` downloads it. Read remote files with `rw_read_file` / the sidebar remote tab: `@src/main.c` in a remote session means `<remote workspace>/src/main.c`, and every `rw_*` tool resolves such a relative path against the remote workspace root. Seeing nothing at all? The remote `@` index falls back to the mirror when the host is unreachable, and the settings page's 测试连接 shows why.
+**`rw_sync`/`rw_push` 报冲突** —— 两边都改过的文件会被跳过并列出（绝不静默覆盖）；手动合并后重试，或用 `force=true` 以一边为准。
 
-**Host key 变了 / 提示可能中间人** — 主机重装过或密钥更换过：`/remote-forget-key`（或设置页 → 机器 → 重新信任），下次连接重新记录。
+**Windows 远程** —— 全部走 SFTP，不依赖 POSIX shell；中文文件用 `encoding=gbk`。
 
-**连接报"认证失败"** — 检查用户名/密码/私钥路径；私钥加密了要填 Passphrase；公司机器要求 OTP/动态码时勾选 keyboard-interactive。
+**镜像里缺目录** —— 默认 ignore 会跳过 `.git`/`node_modules` 等；在 `$DSH_HOME/remote-workspaces/.dsh-remote-ignore` 调整（gitignore 语法）。
 
-**连不上内网机器** — 走跳板机：机器表单里填「跳板机」主机（也可以先把它本身配成一台机器）。主机不可达类错误会给出分类提示。
+**保存远程文件报 409** —— 打开后远端已被改动，重新读取再编辑。
 
-**rw_sync/rw_push 报冲突** — 远端和本地都改过同一个文件时会跳过并列出冲突（绝不静默覆盖）。处理：手动合并后重新同步，或用 `force=true` 以一边为准。
+**密码怎么加密保存** —— 勾选「加密保存密码」：macOS 钥匙串 / Windows DPAPI / Linux secret-tool（libsecret）；后端不可用时回退明文。
 
-**Windows 远程** — 列表/读写/搜索/同步全部走 SFTP 协议，不依赖 POSIX shell；中文文件用 `encoding=gbk` 读。
+**升级后插件整个不见了** —— DSH 兼容性判定丢弃了 bundle，升到 **0.8.29+** 即可（见上文「DSH 版本兼容性」）。
 
-**镜像里没有某个目录** — 默认 ignore 规则（`.git`、`node_modules`、`target` 等）会跳过；在 `$DSH_HOME/remote-workspaces/.dsh-remote-ignore` 加 `!` 之外的条目即可调整（gitignore 语法）。
+**「远程 DSH 界面」连不上/一直转圈** —— 先确认那台机器上的 `dsh web` **本身**能起来。
+两个已知坑（插件会在报错里直接点出来）：
+① **dsh 0.1.0-rc.6 在 Linux 上无法启动 web**——它依赖的 `node-pty@1.1.0` 只带了
+macOS/Windows 的预编译产物，**没有 `linux-x64`**，会报 `Failed to load native module: pty.node`。
+升到 0.1.5-rc.2+ 即可（其 `node-pty@1.2.0-beta.15` 带 Linux 预编译）。
+② **dsh 0.1.0-rc.6 不认识 `--no-open`**（该 flag 是后加的）；插件会自动去掉它重试一次，无需你处理。
+如果远端 `dsh` 不在 SSH 登录 PATH 里（例如装在私有前缀），用 `webAttachCommand` 指向它的绝对路径。
 
-**侧边栏远程文件保存失败（409）** — 远端文件在你打开后已被改动，重新读取后再编辑（mtime 乐观锁保护）。
+## 安全提醒
 
-**密码怎么加密保存** — 机器表单勾选「加密保存密码」：macOS 用系统钥匙串（security），Windows 用 DPAPI，Linux 需要 secret-tool（libsecret）；后端不可用时自动回退明文。
-
-## Safety
-
-Giving the plugin a machine's credentials lets the agent run **shell commands as your user** on that host. Only add machines you trust. Passwords are saved on the local machine file (or the OS keychain when enabled); treat it as sensitive (you may lock file ACLs). Every executed command is recorded in the audit log when `auditLog` is on — review it from the Settings page.
+把凭据交给插件等于允许 Agent 以你的用户身份在该主机执行 **shell 命令**——只添加可信机器。密码存在本机文件（或钥匙串），请当作敏感数据。开启 `auditLog` 时每条命令都会记入审计日志。
 
 ## License
 
 MIT
 
-## Contributing
+## 参与贡献
 
-Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md). Questions, setups and "is this supported?" go to [Discussions](https://github.com/flymysql/dsh-remote/discussions); reproducible bugs go to [Issues](https://github.com/flymysql/dsh-remote/issues).
+欢迎贡献，请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。使用问题、环境配置、「支持 XX 吗」这类讨论请走 [讨论区](https://github.com/flymysql/dsh-remote/discussions)；可复现的缺陷请提 [Issue](https://github.com/flymysql/dsh-remote/issues)。
 
-Thanks to everyone who has landed a change here (merged PRs in parentheses):
+感谢以下已合并 PR 的贡献者：
 
 [@dahaipeng](https://github.com/dahaipeng) (#31) ·
 [@YiHui-Liu](https://github.com/YiHui-Liu) (#28) ·
 [@nekomona](https://github.com/nekomona) (#24) ·
+[@zhz1667](https://github.com/zhz1667) (#43) ·
 [FoolishWiser](https://github.com/FoolishWiser) (#17) ·
 [@jace1cch](https://github.com/jace1cch) (#16) ·
 [@Minggle](https://github.com/Minggle) (#10) ·
 [4FMTWRV](https://github.com/4FMTWRV) (#6) ·
-[glzhangzhi](https://github.com/glzhangzhi) (per-session SSH pool fix)
+[glzhangzhi](https://github.com/glzhangzhi)（per-session SSH 连接池修复）
 
-## Changelog
+## 变更记录
 
-See [CHANGELOG.md](./CHANGELOG.md).
+见 [CHANGELOG.md](./CHANGELOG.md)。
+
+**本地分支扩展**
+
+本地分支保留按工作区隔离的远程上下文、better-sidebar 多根文件树、远程 Git 数据源、SSH 终端与传输 Provider / vscode-tunnel 扩展。开发与 DCF 注入流程见 [AGENTS.md](AGENTS.md) 和 [开发说明](docs/develop.md)。

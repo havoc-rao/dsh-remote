@@ -38,6 +38,7 @@ async function loadPlugin(home) {
 function makeCtx() {
   const routes = new Map()
   const ctx = {
+    inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) },
     effect: () => {},
     get: (name) => (name === 'webServer'
       ? { register: (r) => { routes.set(r.path, r.handler); return () => {} } }
