@@ -48,7 +48,7 @@ function dependencies(initial = []) {
   }
 }
 
-function loadClient() {
+function loadClient(statusFetch) {
   let plugin
   vm.runInNewContext(source, {
     window: {
@@ -73,7 +73,7 @@ function loadClient() {
       if (path === '/dsh-remote/slot-config') {
         return { ok: true, json: async () => ({ sidebarDirectoryFlowSlot: '' }) }
       }
-      // /dsh-remote/status: non-empty mirror root → provider registers.
+      if (statusFetch) return statusFetch(url)
       return { ok: true, json: async () => ({ mirrorRoot: '/mirror', mirrorDirs: ['/mirror'] }) }
     },
   }, { filename: 'lib/client.js' })
@@ -90,7 +90,7 @@ function createHost() {
   const slotsAvailable = dependencies(seats.map((name) => [name, true]))
   const services = dependencies()
   const registrations = new Map()
-  const terminalProvider = { registered: null }
+  const terminalProvider = { registered: null, revisions: 0 }
   const cleanups = []
   const provided = []
   function scope() {
@@ -151,6 +151,7 @@ function createHost() {
     registerTerminalProvider(provider) {
       assert.equal(terminalProvider.registered, null, 'terminal provider registers once per lifetime')
       terminalProvider.registered = provider
+      terminalProvider.revisions += 1
       return () => { if (terminalProvider.registered === provider) terminalProvider.registered = null }
     },
   }
@@ -190,6 +191,9 @@ test('registerTunnel validates id, rejects duplicates, disposer unregisters', as
   assert.throws(() => svc.registerTunnel({ id: 'Bad ID', match: () => true, createTransport: () => null }), /invalid id/)
   assert.throws(() => svc.registerTunnel({ id: 'wb', match: () => true }), /createTransport\(\) required/)
   assert.throws(() => svc.registerTunnel({ id: 'wb', createTransport: () => null }), /match\(\) required/)
+  for (const bad of [null, true, {}, 'source']) {
+    assert.throws(() => svc.registerTunnel({ id: 'wb', match: () => true, createTransport: () => null, createWorkspaceSource: bad }), /createWorkspaceSource\(\) must be a function/)
+  }
   const disposer = svc.registerTunnel({ id: 'wb:t', match: () => true, createTransport: () => null })
   assert.throws(() => svc.registerTunnel({ id: 'wb:t', match: () => true, createTransport: () => null }), /already registered/)
   assert.ok(svc.tunnelIds().includes('wb:t'))
@@ -302,4 +306,171 @@ test('unregisterTunnel removes a tunnel immediately', async () => {
   assert.equal(provider.match('s', '/wbfs', 'term'), false)
   const t = provider.createTransport('s', '/wbfs', 'term')
   assert.notEqual(t.via, 'tunnel')
+})
+
+test('workspace source is forwarded synchronously with original scope and opaque terminal ids', async () => {
+  const plugin = loadClient()
+  const { ctx, terminalProvider } = createHost()
+  await plugin.apply(ctx)
+  await settle()
+  const calls = []
+  const managed = {
+    create: async (title) => ({ terminalId: 'wb/opaque-id', title, cwd: '/wbfs', createdBySessionId: 's', createdAt: 1, exited: false }),
+    list: async () => ({ terminals: [] }),
+    terminate: async () => {},
+    createTransport: () => ({ open() {} }),
+  }
+  ctx.get(SERVICE).registerTunnel({
+    id: 'wb:managed', match: () => true, createTransport: () => null,
+    createWorkspaceSource: (sid, cwd) => { calls.push([sid, cwd]); return managed },
+  })
+  const provider = terminalProvider.registered
+  assert.equal(typeof provider.createWorkspaceSource('s', '/wbfs').createTransport, 'function')
+  assert.equal(typeof provider.createWorkspaceSource('', '').list, 'function')
+  assert.equal(typeof provider.createWorkspaceSource(undefined, undefined).list, 'function')
+  assert.deepEqual(calls, [['s', '/wbfs'], ['', ''], [undefined, undefined]])
+  assert.equal((await managed.create('Title')).terminalId, 'wb/opaque-id')
+  ctx.dispose()
+  assert.equal(terminalProvider.registered, null)
+})
+
+test('workspace source resolves the same management probe as sidebar provider matching', async () => {
+  const plugin = loadClient()
+  const { ctx, terminalProvider } = createHost()
+  await plugin.apply(ctx)
+  await settle()
+  const probes = []
+  const managed = { list() {}, create() {}, terminate() {}, createTransport() {} }
+  ctx.get(SERVICE).registerTunnel({
+    id: 'wb:management-only',
+    match: (sid, cwd, tabId) => {
+      probes.push([sid, cwd, tabId])
+      return tabId === 'terminal:workspace-management'
+    },
+    createTransport: () => null,
+    createWorkspaceSource: () => managed,
+  })
+  const provider = terminalProvider.registered
+  assert.equal(provider.match('s', '/outside-mirror', 'terminal:workspace-management'), true)
+  assert.equal(typeof provider.createWorkspaceSource('s', '/outside-mirror').list, 'function')
+  assert.deepEqual(probes, [
+    ['s', '/outside-mirror', 'terminal:workspace-management'],
+    ['s', '/outside-mirror', 'terminal:workspace-management'],
+  ])
+  ctx.dispose()
+})
+
+test('missing managed capability never substitutes legacy or local mirror management', async () => {
+  const plugin = loadClient()
+  const { ctx, terminalProvider } = createHost()
+  await plugin.apply(ctx)
+  await settle()
+  const provider = terminalProvider.registered
+  assert.equal(provider.match('s', '/mirror'), true)
+  const svc = ctx.get(SERVICE)
+  const off = svc.registerTunnel({ id: 'wb:legacy', match: () => true, createTransport: () => { throw new Error('must not create legacy PTY') } })
+  assert.equal(provider.createWorkspaceSource('s', '/wbfs'), undefined)
+  off()
+  const offMissing = svc.registerTunnel({ id: 'wb:empty', match: () => true, createTransport: () => null, createWorkspaceSource: () => undefined })
+  assert.equal(provider.createWorkspaceSource('s', '/mirror'), undefined)
+  offMissing()
+  svc.registerTunnel({ id: 'wb:error', match: () => true, createTransport: () => null, createWorkspaceSource: () => { throw new Error('backend unavailable') } })
+  assert.throws(() => provider.createWorkspaceSource('s', '/wbfs'), /backend unavailable/)
+})
+
+test('provider exists before mirror status settles; late tunnels and unloading tick registry', async () => {
+  const plugin = loadClient(() => new Promise(() => {}))
+  const { ctx, terminalProvider } = createHost()
+  await plugin.apply(ctx)
+  const provider = terminalProvider.registered
+  assert.ok(provider, 'does not wait for mirror discovery')
+  const svc = ctx.get(SERVICE)
+  const managed = { create() {}, list() {}, terminate() {}, createTransport() {} }
+  const startRevision = terminalProvider.revisions
+  const off = svc.registerTunnel({ id: 'wb:late', match: (sid) => sid === 'bound', createTransport: () => null, createWorkspaceSource: () => managed })
+  assert.equal(provider.match('bound', '/not-a-mirror'), true)
+  assert.equal(typeof provider.createWorkspaceSource('bound', '/not-a-mirror').list, 'function')
+  assert.ok(terminalProvider.revisions > startRevision)
+  off()
+  // Do not select a native source here: this test exercises tunnel re-registration.
+  assert.equal(provider.match('bound', '/not-a-mirror'), false)
+  const afterOff = terminalProvider.revisions
+  svc.registerTunnel({ id: 'wb:late', match: () => true, createTransport: () => null, createWorkspaceSource: () => managed })
+  off() // stale disposer must not unregister the replacement
+  assert.equal(typeof provider.createWorkspaceSource('bound', '/not-a-mirror').list, 'function')
+  svc.unregisterTunnel('wb:late')
+  assert.ok(terminalProvider.revisions > afterOff)
+  // Do not select a native source here: this test exercises tunnel re-registration.
+  ctx.dispose()
+  const disposedRevision = terminalProvider.revisions
+  svc.registerTunnel({ id: 'wb:disposed', match: () => true, createTransport: () => null })
+  assert.equal(terminalProvider.registered, null)
+  assert.equal(terminalProvider.revisions, disposedRevision, 'unloaded provider no longer listens')
+})
+
+test('transient status failure preserves validated mirror routing; confirmed empty status clears it', async () => {
+  let status = 'known'
+  const plugin = loadClient(async () => {
+    if (status === 'failure') throw new Error('temporary status outage')
+    return { ok: true, json: async () => status === 'known'
+      ? ({ mirrorRoot: '/mirror', mirrorDirs: ['/mirror'] })
+      : ({ mirrorRoot: '', mirrorDirs: [] }) }
+  })
+  const { ctx, services, terminalProvider } = createHost()
+  await plugin.apply(ctx)
+  await settle()
+  const bs = services.values.get('betterSidebar')
+  assert.equal(terminalProvider.registered.match('s', '/mirror'), true)
+  status = 'failure'
+  services.remove('betterSidebar')
+  services.set('betterSidebar', bs)
+  await settle()
+  assert.equal(terminalProvider.registered.match('s', '/mirror'), true, 'known remote does not become local on fetch failure')
+  assert.equal(typeof terminalProvider.registered.createWorkspaceSource('s', '/mirror').list, 'function')
+  status = 'empty'
+  services.remove('betterSidebar')
+  services.set('betterSidebar', bs)
+  await settle()
+  assert.equal(terminalProvider.registered.match('s', '/mirror'), false, 'successful empty response clears obsolete mirror')
+  ctx.dispose()
+})
+
+test('native source is synchronous without binding and stable across tunnel hotload', async () => {
+  const plugin = loadClient()
+  const { ctx, terminalProvider } = createHost()
+  await plugin.apply(ctx); await settle()
+  const provider = terminalProvider.registered
+  const native = provider.createWorkspaceSource('native-session', '/mirror')
+  assert.equal(typeof native.create, 'function')
+  const off = ctx.get(SERVICE).registerTunnel({ id: 'wb:new', match: () => true, createTransport: () => null,
+    createWorkspaceSource: () => { throw new Error('must not migrate native backend') } })
+  assert.equal(provider.createWorkspaceSource('native-session', '/mirror'), native)
+  off()
+  assert.equal(provider.createWorkspaceSource('native-session', '/mirror'), native)
+  ctx.dispose()
+})
+
+test('tunnel source routes saved native ids to native namespace without invoking workbench', async () => {
+  const plugin = loadClient()
+  const {ctx,terminalProvider}=createHost(); await plugin.apply(ctx); await settle()
+  const seen=[]
+  ctx.get(SERVICE).registerTunnel({id:'wb:routing',match:()=>true,createTransport:()=>null,createWorkspaceSource:()=>({
+    create() {}, list() {}, terminate: id=>seen.push(id), createTransport:id=>({kind:'workbench',id}),
+  })})
+  const source=terminalProvider.registered.createWorkspaceSource('s','/mirror')
+  assert.equal(source.createTransport('remote-managed:saved').kind,'dsh-remote-managed')
+  assert.equal(source.createTransport('wb-opaque').kind,'workbench')
+  source.terminate('wb-opaque'); assert.deepEqual(seen,['wb-opaque'])
+  ctx.dispose()
+})
+
+test('empty mirror status still allows a tunnel remote workspace to match', async () => {
+  const plugin = loadClient(async () => ({ ok: true, json: async () => ({ mirrorRoot: '', mirrorDirs: [] }) }))
+  const { ctx, terminalProvider } = createHost()
+  await plugin.apply(ctx)
+  await settle()
+  assert.ok(terminalProvider.registered)
+  ctx.get(SERVICE).registerTunnel({ id: 'wb:empty-root', match: () => true, createTransport: () => ({ kind: 'workbench' }) })
+  assert.equal(terminalProvider.registered.match('bound', '/remote'), true)
+  ctx.dispose()
 })
