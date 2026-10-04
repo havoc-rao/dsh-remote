@@ -152,6 +152,66 @@ cordis.patch.yml（bundle 层 patch，config: !!js 扫描 composed patch stack�
 - 产品动态更新链路（本文 §0–§2）已覆盖同样目的：改源码 → build.mjs → 运行实例热更新，**不需要沙箱**。
 - 若仍要恢复沙箱：把 `require_app()` 的解析改为来源回退 —— `NODE=$(command -v node)`、`BIN=$PROD_HOME/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`、`PATCH=$PROD_HOME/profiles/$PROFILE/cordis.patch.yml`（PROD_HOME 已由 DSH_HOME 推导）。注意沙箱 `build_profile()` 的 `cp -al` 硬链接语义在新形态（link 部署）下会把 symlink 原样拷过去，`sync_lib` 的 `rm -rf "$INSTALL_DIR/lib"` 在 symlink 安装上是「删源文件」危险操作——恢复前先确认安装形态。
 
+## Terminal tunnel 与工作区终端管理契约
+
+客户端服务 `dsh-remote.terminalTunnel`（version 1）提供 `registerTunnel`、
+`unregisterTunnel`、`tunnelIds` 与 `resolveTunnel`。注册返回幂等 disposer，旧 disposer
+不会卸载相同 id 后注册的替代实例。`id`、`match` 与普通 `createTransport` 为必填。
+
+```js
+registerTunnel({
+  id: 'plugin:tunnel',
+  match(sessionId, cwd, tabId) { /* 同步返回远程绑定是否命中 */ },
+  createTransport(sessionId, cwd, tabId) { /* 既有普通终端 transport */ },
+  // 可选；必须是同步工厂（不可 async），返回 source 或 undefined。
+  createWorkspaceSource(sessionId, cwd) {
+    return {
+      create: async (title) => terminalInfo,
+      list: async (signal) => ({ terminals: [] }),
+      terminate: async (terminalId) => {},
+      createTransport: (terminalId) => managedTransport,
+    }
+  },
+})
+```
+
+`terminalInfo` 字段：`terminalId`、`title`、`cwd`、`createdBySessionId`、`createdAt`
+（number）、`exited`（boolean）、可选 `exitCode`（number 或 null）。终端 id 为不透明
+字符串，不要求 `terminal:` 前缀。managed transport 使用 better-sidebar 的既有 transport
+词汇，但 `close` / `park` / `dispose` **只分离视图**；仅 source 的 `terminate` 杀进程。
+
+remote provider 的 source 工厂同步解析首个命中 tunnel，并**原样传递 sidebar 的
+sessionId / cwd**（包括 undefined / 空字符串，不转换 home scope）；source 缺失、返回
+undefined 或抛错均不会转入本地镜像管理，也不会把本插件 legacy SSH transport 冒充
+managed source。**无命中 tunnel** 时现在同步返回原生 managed source：
+
+- POST `/dsh-remote/workspace-terminals/{create,list,terminate}`，body 仅以真实 `sessionId`
+  授权（`title?` / `terminalId?` 为操作参数），不以浏览器 cwd/workspace/machine 授权。
+- WS `/dsh-remote/ws/workspace-terminal?sessionId=…&terminalId=…&cols=…&rows=…`。
+  上行 JSON `input(data)` / `resize(cols,rows)`；下行 JSON `init` / `output(data)` /
+  `title` / `closed(reason: exited|terminated|missing)` / `fatal`。`onClosed` 回调传字符串，权限拒绝
+  只触发 fatal，不能当作 missing 自动换进程。
+- 服务端沿用 mirror 的 saved machine 和 `machinePoolOf/openPty`，root 由该机器 SFTP
+  `realpath` 规范化；同机器 + canonical root 的不同 session 共享实例。无独立 workbench
+  target/binding 或秘密复制。每次管理/WS attach 校验真实 session，live view 重绑定后拒绝输入输出。
+- ID 为 `remote-managed:<uuid>`；native scope source 在同页 tunnel 热加载后保持稳定，
+  已保存 native ID 的 resume/terminate 不会改接 workbench namespace。
+- 创建立即 spawn，active+spawning 受 `terminalMaxSessions` 限制；自然退出不自动 respawn，
+  exited 元数据最多保留 64 条。多视图 detach 不杀进程，只有 terminate/宿主卸载会终止。
+  transcript 48KiB、每次 replay 32KiB，slow WS 512KiB 单独断开，输入 64KiB。
+- 实例为宿主内存状态；宿主重启后旧 ID 报 missing。host 改动需宿主插件 reload（无 HMR
+  时重启）并刷新浏览器验证；仅更新磁盘不表示当前运行实例已启用。
+
+普通 `createTransport` 的 legacy 回退/close/grace 行为以及 file/git 契约保持不变。
+
+terminal provider 随 betterSidebar 服务就位立即注册，不依赖镜像 status 完成；tunnel
+晚注册 / 卸载与镜像目录更新会触发 provider registry 更新。status 请求瞬时失败保留
+已验证镜像，成功返回空目录则清除。**绑定真值与 cold cache 策略属于 tunnel 实现**：
+必须同步识别已知远程绑定，不能因 refresh 未完成返回 false 并让 sidebar 偷开本地。
+remote 不根据任意 cwd 或未确认 session 猜测远端，以免接管普通本地工作区。
+
+验证：`node --test test/terminal-tunnel.test.js`（真实 client apply 的 VM 生命周期测试）。
+
 ## 6. 常见问题
 
 | 症状 | 原因 | 处理 |
