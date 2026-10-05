@@ -213,11 +213,13 @@ test('native right-sidebar attaches late, opens a session-scoped remote file, an
   const child = explorer.render({ sessionId: 'session-one', useTabInfo: () => ({ tab: {
     visible: true, actions: { openResource(value) { address = value } },
   } }) })
-  assert.equal(child.props.scope.sessionId, 'session-one')
-  child.props.onOpenFile('/workspace/中文 #?.md')
+  const explorerBody = child.type(child.props)
+  assert.equal(explorerBody.props.scope.sessionId, 'session-one')
+  explorerBody.props.onOpenFile('/workspace/中文 #?.md')
   assert.equal(address, 'dsh-resource://dsh-remote/session-one/%2Fworkspace%2F%E4%B8%AD%E6%96%87%20%23%3F.md')
   const reader = file.render({ sessionId: 'session-one', useTabInfo: () => ({ tab: { navigation: { address } } }) })
-  assert.equal(reader.props.tab.path, '/workspace/中文 #?.md')
+  const readerBody = reader.type(reader.props)
+  assert.equal(readerBody.props.tab.path, '/workspace/中文 #?.md')
   assert.equal(types.get('dsh-remote/file').title(address), '中文 #?.md')
   host.services.remove('sidebarRightTabs')
   assert.equal(types.size, 0)
