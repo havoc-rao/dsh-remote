@@ -119,6 +119,20 @@ function listing(names, { machine, path = '/proj' } = {}) {
   }
 }
 
+test('carrier picker validates stable target echo, not transient dial port', async () => {
+  const connector = { kind: 'devtunnel', tunnelId: 'test.jpe1', remotePort: 22 }
+  const machine = { id: 'carrier-b', transport: 'ssh', username: 'remote', connector }
+  const m = mockApi(() => Promise.resolve(listing(['src/'], { machine: { machineId: 'carrier-b', connector, host: '127.0.0.1', port: 57680, username: 'remote' } })))
+  const picker = makePicker(m.api, { machines: [machine], machineId: machine.id })
+  const result = await picker.fetchDirList(machine.id, '/proj', true)
+  assert.equal(result.dirs[0].name, 'src')
+  assert.equal(m.gets().length, 1)
+  const bad = mockApi(() => Promise.resolve(listing(['wrong/'], { machine: { machineId: 'other', connector, host: '127.0.0.1', port: 57680 } })))
+  const badPicker = makePicker(bad.api, { machines: [machine], machineId: machine.id })
+  await assert.rejects(badPicker.fetchDirList(machine.id, '/proj', true), /identity mismatch/)
+  assert.equal(badPicker.lsCacheRef.current.size, 0)
+})
+
 const M1_ECHO = { host: '10.0.0.1', port: 22, username: 'dev' }
 const MACHINES = [
   { id: 'm1', host: '10.0.0.1', port: 22, username: 'dev' },

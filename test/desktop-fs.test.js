@@ -127,6 +127,16 @@ test('carrier sidebar reports unknown commit without replaying rename', async ()
   assert.equal(fs.readFileSync('/proj/a.txt').toString(), 'complete-new')
 })
 
+test('carrier ls exposes stable identity alongside runtime dial address', async () => {
+  const fs = new MemFs(); seed(fs, { 'proj/a.txt': 'data' })
+  const connectorIdentity = { kind: 'devtunnel', tunnelId: 'target.jpe1', remotePort: 22 }
+  const routes = routesFor(makeSftp(fs), { ws: '/proj', carrier: true, bound: true, machineId: 'carrier-b', connectorIdentity })
+  const listed = await call(routes['/dsh-remote/ls'], { method: 'GET', url: '/dsh-remote/ls?machine=carrier-b&path=/proj' })
+  assert.equal(listed.status, 200)
+  assert.equal(listed.json.machine.machineId, 'carrier-b')
+  assert.deepEqual(listed.json.machine.connector, connectorIdentity)
+})
+
 test('sidebar /ls returns session-bound listing from the resolved pool', async () => {
   const fs = new MemFs()
   seed(fs, { 'proj/src/a.ts': 'x' })
