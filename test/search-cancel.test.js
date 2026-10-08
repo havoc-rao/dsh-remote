@@ -134,6 +134,18 @@ test('a dead sftp channel fails fast instead of waiting out the timeout', async 
   pool.close()
 })
 
+test('file transfer deadline is independent from short metadata deadline', async () => {
+  const raw = new EventEmitter()
+  raw.stat = (_path, done) => setTimeout(() => done(null, { size: 4 }), 80)
+  raw.readFile = (_path, done) => setTimeout(() => done(null, Buffer.from('data')), 80)
+  const pool = new SshPool({ host: 'fixture', port: 1, username: 'test', commandTimeoutMs: 20, transferTimeoutMs: 1000 })
+  pool.connect = async () => ({ sftp: done => done(null, raw), end() {} })
+  const sftp = await pool.sftp()
+  await assert.rejects(sftp.stat('/fixture'), /timed out/)
+  assert.equal((await sftp.readFile('/fixture')).toString(), 'data')
+  pool.close()
+})
+
 test('sftp() bounds the subchannel open itself', async () => {
   // Regression: `c.sftp(cb)` had no timeout, so an unresponsive remote parked forever.
   const pool = new SshPool({ host: 'x', port: 22, username: 'u', commandTimeoutMs: 400 })

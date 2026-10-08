@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { sanitizeMachineRecord } from '../lib/provider.js'
+import { SshPool } from '../lib/pool.js'
+import { registerSshCarrier } from '../lib/ssh-carrier.js'
 import { saveSecret, getSecret, deleteSecret, platformBackend } from '../lib/credential.js'
 import { registerProvider } from '../lib/provider.js'
 import { findMirrorsForRemotePath, machineForMirror } from '../lib/route-machine.js'
@@ -76,6 +78,151 @@ async function callRoute(route, body, method = 'POST', url = '/dsh-remote/machin
 
 const machinesRoute = (routes) => routes.get('/dsh-remote/machines')
 const persisted = (home) => JSON.parse(readFileSync(path.join(home, 'remote-workspaces', 'machines.json'), 'utf8'))
+
+test('explicit experimental carrier CRUD preserves stable target without activating workspace', async t => {
+  const home = fixture(t)
+  const normalize = c => { if (!c || c.kind !== 'crud-fixture' || typeof c.target !== 'string') throw new Error('invalid target'); return { kind: c.kind, target: c.target } }
+  const dispose = registerSshCarrier({ id: 'crud-fixture', acquire() { return Promise.resolve({ dialHost: '127.0.0.1', dialPort: 50736, targetIdentity: 'b', generation: 'fixture', closed: new Promise(() => {}), release() {} }) }, sanitizeConnector: normalize, validateConnector: normalize, targetIdentity: c => normalize(c).target })
+  t.after(dispose)
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG, experimentalSshCarrier: true })
+  const pin = 'SHA256:' + Buffer.alloc(32, 3).toString('base64').replace(/=+$/, '')
+  const added = await callRoute(machinesRoute(routes), { action: 'add', id: 'carrier-b', username: 'remote', useAgent: true, connector: { kind: 'crud-fixture', target: 'b' }, expectedHostFingerprint: pin, host: 'trap', port: 50736 })
+  assert.equal(added.status, 200, JSON.stringify(added.body))
+  assert.equal(added.body.machine.host, undefined)
+  assert.equal(added.body.machine.password, undefined)
+  assert.equal(persisted(home).currentId, undefined)
+  const update = await callRoute(machinesRoute(routes), { action: 'update', id: 'carrier-b', name: 'renamed' })
+  assert.equal(update.status, 200, JSON.stringify(update.body))
+  assert.equal(update.body.machine.username, 'remote')
+  const changed = await callRoute(machinesRoute(routes), { action: 'update', id: 'carrier-b', connector: { kind: 'crud-fixture', target: 'other' } })
+  assert.equal(changed.status, 400)
+  assert.match(changed.body.error, /target cannot change/)
+  const originalSftp = SshPool.prototype.sftp
+  SshPool.prototype.sftp = async function () { return { stat: async () => ({ isDirectory: () => true }) } }
+  try {
+    const mirrored = await callRoute(routes.get('/dsh-remote/mirror'), { path: '/srv/project', machine: 'carrier-b', workspace: '/local/source' }, 'POST', '/dsh-remote/mirror')
+    assert.equal(mirrored.status, 200, JSON.stringify(mirrored.body))
+    const meta = JSON.parse(readFileSync(path.join(mirrored.body.localMirror, '.dsh-remote-meta.json'), 'utf8'))
+    assert.equal(meta.schemaVersion, 3)
+    assert.equal(meta.machineId, 'carrier-b')
+    assert.equal(meta.connectorTargetIdentity, 'b')
+    assert.equal(meta.host, undefined)
+    assert.equal(meta.port, undefined)
+    const resolved = await callRoute(routes.get('/dsh-remote/resolve-mirror'), null, 'GET', '/dsh-remote/resolve-mirror?local=' + encodeURIComponent(mirrored.body.localMirror))
+    assert.equal(resolved.body.machineId, 'carrier-b')
+    assert.equal(resolved.body.schemaVersion, 3)
+  } finally { SshPool.prototype.sftp = originalSftp }
+  const deleted = await callRoute(machinesRoute(routes), { action: 'delete', id: 'carrier-b' })
+  assert.equal(deleted.status, 200)
+  assert.equal(persisted(home).list.length, 0)
+})
+
+test('unavailable saved carrier does not crash settings or expose connector secrets', async t => {
+  const home = fixture(t)
+  writeFileSync(path.join(home, 'remote-workspaces', 'machines.json'), JSON.stringify({ list: [{ id: 'offline-carrier', name: 'offline', transport: 'ssh', connector: { kind: 'missing-plugin', token: 'DO_NOT_EXPOSE' }, password: 'PASSWORD_SECRET', passphrase: 'PASSPHRASE_SECRET' }] }))
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG })
+  const result = await callRoute(machinesRoute(routes), null, 'GET')
+  assert.equal(result.status, 200)
+  assert.equal(result.body.machines[0].carrierUnavailable, true)
+  const wire = JSON.stringify(result.body)
+  for (const secret of ['DO_NOT_EXPOSE', 'PASSWORD_SECRET', 'PASSPHRASE_SECRET']) assert.ok(!wire.includes(secret))
+})
+
+test('strict orphan mirror reconnect refuses profile-config fallback', async t => {
+  const home = fixture(t)
+  const dir = path.join(home, 'remote-workspaces', 'strict-fixture', 'project')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify({ schemaVersion: 3, transport: 'ssh', machineId: 'missing-owner', connectorTargetIdentity: 'target-b', remotePath: '/srv/orphan' }))
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG, host: 'trap.invalid', username: 'unrelated' })
+  const result = await callRoute(routes.get('/dsh-remote/reconnect'), { path: '/srv/orphan', workspace: '/local/unrelated' })
+  assert.equal(result.status, 400)
+  assert.match(result.body.error, /cannot fall back/)
+})
+
+test('malformed null connector cannot be downgraded or probed as direct SSH', async t => {
+  const home = fixture(t)
+  writeFileSync(path.join(home, 'remote-workspaces', 'machines.json'), JSON.stringify({ list: [{ id: 'malformed', connector: null, host: 'trap.invalid', port: 22, username: 'remote' }] }))
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG })
+  const updated = await callRoute(machinesRoute(routes), { action: 'update', id: 'malformed', host: 'other.invalid' })
+  assert.equal(updated.status, 400)
+  assert.match(updated.body.error, /experimental/)
+  const result = await callRoute(routes.get('/dsh-remote/test-connect'), { id: 'malformed', host: 'trap.invalid' })
+  assert.equal(result.body.ok, false)
+  assert.match(result.body.error, /cannot fall back/)
+})
+
+test('fresh carrier probe uses lease endpoint and releases on success/failure', async t => {
+  const home = fixture(t)
+  let released = 0
+  let acquired = 0
+  const normalize = c => { if (c?.kind !== 'probe-fixture') throw new Error('invalid connector'); return { kind: 'probe-fixture' } }
+  t.after(registerSshCarrier({ id: 'probe-fixture', validateConnector: normalize, sanitizeConnector: normalize, targetIdentity: () => 'remote-b', acquire: async () => { acquired++; return { dialHost: '127.0.0.1', dialPort: 50736, targetIdentity: 'remote-b', generation: 'g1', closed: new Promise(() => {}), release() { released++ } } } }))
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG, experimentalSshCarrier: true })
+  const originals = { connect: SshPool.prototype.connect, exec: SshPool.prototype.exec }
+  let fail = false
+  SshPool.prototype.connect = async function () { assert.equal(this.config.port, 50736); assert.equal(this.config.hostKeyMode, 'verify'); return {} }
+  SshPool.prototype.exec = async function () { if (fail) throw new Error('fixture exec failure'); return {} }
+  const input = { connector: { kind: 'probe-fixture' }, username: 'remote', useAgent: true, host: 'trap.invalid', expectedHostFingerprint: 'SHA256:' + Buffer.alloc(32, 4).toString('base64').replace(/=+$/, '') }
+  try {
+    const route = routes.get('/dsh-remote/test-connect')
+    const success = await callRoute(route, input)
+    assert.equal(success.body.ok, true)
+    assert.equal(released, 1)
+    fail = true
+    const failure = await callRoute(route, input)
+    assert.equal(failure.body.ok, false)
+    assert.equal(released, 2)
+    const missing = await callRoute(route, { ...input, id: 'unknown' })
+    assert.equal(missing.body.ok, false)
+    assert.equal(acquired, 2)
+    const unknownOnly = await callRoute(route, { id: 'unknown', host: 'trap.invalid' })
+    assert.equal(unknownOnly.body.ok, false)
+    assert.match(unknownOnly.body.error, /machine not found/)
+    assert.equal(acquired, 2)
+  } finally { Object.assign(SshPool.prototype, originals) }
+})
+
+test('connection probe always closes its fresh pool after exec failure', async t => {
+  const home = fixture(t)
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG })
+  const originals = { connect: SshPool.prototype.connect, exec: SshPool.prototype.exec, close: SshPool.prototype.close }
+  let closed = 0
+  SshPool.prototype.connect = async function () { return {} }
+  SshPool.prototype.exec = async function () { throw new Error('fixture exec failure') }
+  SshPool.prototype.close = function () { closed++ }
+  try {
+    const result = await callRoute(routes.get('/dsh-remote/test-connect'), { host: 'fixture.invalid', username: 'remote' }, 'POST', '/dsh-remote/test-connect')
+    assert.equal(result.body.ok, false)
+    assert.equal(closed, 1)
+  } finally { Object.assign(SshPool.prototype, originals) }
+})
+
+test('experimental connectors are rejected before ordinary CRUD or raw probe fallback', async t => {
+  const home = fixture(t)
+  const { apply } = await loadPlugin(home)
+  const { ctx, routes } = makeCtx()
+  await apply(ctx, { ...CONFIG })
+  for (const connector of [null, {}, { kind: 'devtunnel' }]) {
+    const result = await callRoute(machinesRoute(routes), { action: 'add', host: '127.0.0.1', connector })
+    assert.equal(result.status, 400)
+    assert.match(result.body.error, /experimental/)
+    const probe = await callRoute(routes.get('/dsh-remote/test-connect'), { host: '127.0.0.1', connector }, 'POST', '/dsh-remote/test-connect')
+    assert.equal(probe.body.ok, false)
+    assert.match(probe.body.error, /cannot fall back/)
+  }
+})
 
 test('① 缺省 transport 保存 → 记录与旧 SSH 完全同形（含 password 原样落盘、无 transport 键）', async (t) => {
   const home = fixture(t)

@@ -15,6 +15,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { resolveMirror, poolKey } from '../lib/binding.js'
+import { machineForMirror } from '../lib/route-machine.js'
+import { registerSshCarrier } from '../lib/ssh-carrier.js'
 
 const root = () => mkdtempSync(path.join(tmpdir(), 'dsh-remote-bind-'))
 
@@ -148,6 +150,59 @@ test('resolveMirror: a v2 (vscode-tunnel) meta mirror resolves to a machine carr
   // needs host/port/username and stays stable for the ssh key space).
   assert.equal(poolKey(a.machine), '@127.0.0.1:22')
   rmSync(d, { recursive: true, force: true })
+})
+
+test('schema3 descriptor identity survives hostless mirrors and ignores transient endpoint', (t) => {
+  const d = root()
+  t.after(() => rmSync(d, { recursive: true, force: true }))
+  t.after(registerSshCarrier({
+    id: 'binding-fixture',
+    acquire() { throw new Error('binding must not acquire a carrier') },
+    targetIdentity(connector) {
+      if (!connector.config || connector.config.target !== 'one') throw new Error('invalid target')
+      return 'canonical-descriptor-one'
+    },
+  }))
+  const dir = path.join(d, 'ssh-carrier-one', 'proj')
+  mkdirSync(dir, { recursive: true })
+  const meta = { schemaVersion: 3, transport: 'ssh', machineId: 'one', connectorTargetIdentity: 'canonical-descriptor-one', remotePath: '/proj' }
+  writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify(meta))
+  const resolved = resolveMirror(dir, d)
+  assert.equal(resolved.mirrorDir, dir)
+  assert.equal(resolved.machine.schemaVersion, 3)
+  assert.equal(resolved.machine.machineId, 'one')
+  assert.equal(resolved.machine.connectorTargetIdentity, meta.connectorTargetIdentity)
+  const saved = { id: 'one', transport: 'ssh', connector: { kind: 'binding-fixture', config: { target: 'one' }, targetIdentity: 'forged-lease-identity' } }
+  assert.equal(machineForMirror(resolved.machine, [saved]).record, saved)
+  for (const connector of [
+    { kind: 'unregistered', targetIdentity: meta.connectorTargetIdentity },
+    { kind: 'binding-fixture', targetIdentity: meta.connectorTargetIdentity },
+    { kind: 'binding-fixture', config: { target: 'other' }, targetIdentity: meta.connectorTargetIdentity },
+  ]) assert.equal(machineForMirror(resolved.machine, [{ ...saved, connector }]), null)
+  assert.equal(poolKey(resolved.machine), poolKey({ ...resolved.machine, host: '127.0.0.1', port: 43210 }))
+  assert.notEqual(poolKey(resolved.machine), poolKey({ ...resolved.machine, machineId: 'two' }))
+  assert.notEqual(poolKey(resolved.machine), poolKey({ ...resolved.machine, connectorTargetIdentity: 'other-descriptor' }))
+})
+
+test('malformed strict mirror stays remote-owned and cannot fall back to a direct triple', (t) => {
+  const d = root()
+  t.after(() => rmSync(d, { recursive: true, force: true }))
+  const dir = path.join(d, 'strict-broken', 'proj')
+  mkdirSync(dir, { recursive: true })
+  for (const bad of [
+    { schemaVersion: 3, transport: 'ssh' },
+    { schemaVersion: 3, transport: 'ssh', machineId: 42, connectorTargetIdentity: 'target' },
+    { schemaVersion: '3', transport: 'ssh', machineId: 'one', connectorTargetIdentity: 'target' },
+    { connectorTargetIdentity: 'target' },
+    { schemaVersion: 4, transport: 'ssh', machineId: 'one', connectorTargetIdentity: 'target' },
+  ]) {
+    writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify({ host: 'localhost', port: 22, username: 'root', remotePath: '/proj', ...bad }))
+    const resolved = resolveMirror(dir, d)
+    assert.equal(resolved.mirrorDir, dir)
+    assert.equal(resolved.remotePath, '/proj')
+    assert.equal(machineForMirror(resolved.machine, [{ id: 'direct', host: 'localhost', port: 22, username: 'root' }]), null)
+    assert.throws(() => poolKey(resolved.machine), /invalid strict/)
+  }
 })
 
 test('resolveMirror: v1 metas resolve to the legacy machine shape — no transport/machineId keys', () => {

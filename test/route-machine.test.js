@@ -4,6 +4,19 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:
 import os from 'node:os'
 import path from 'node:path'
 import { findMirrorsForRemotePath, pickMirrorForRemotePath, normalizeRoutePath, machineForMirror } from '../lib/route-machine.js'
+import { registerSshCarrier } from '../lib/ssh-carrier.js'
+
+function registerFixtureCarrier(t) {
+  t.after(registerSshCarrier({
+    id: 'route-fixture',
+    acquire() { throw new Error('routing must not acquire a carrier') },
+    targetIdentity(connector) {
+      if (!connector.config || typeof connector.config.target !== 'string' || !connector.config.target.trim()) throw new Error('invalid target')
+      return connector.config.target
+    },
+  }))
+}
+const fixtureConnector = (target = 'canonical-target') => ({ kind: 'route-fixture', config: { target } })
 
 /** Build a fake <mirrorRoot>/<tag>/<base>/.dsh-remote-meta.json tree. */
 function makeMirrorRoot(specs) {
@@ -18,10 +31,82 @@ function makeMirrorRoot(specs) {
     if (s.transport) meta.transport = s.transport
     if (s.machineId) meta.machineId = s.machineId
     if (s.remoteIdentity) meta.remoteIdentity = s.remoteIdentity
+    if ('schemaVersion' in s) meta.schemaVersion = s.schemaVersion
+    if ('connectorTargetIdentity' in s) meta.connectorTargetIdentity = s.connectorTargetIdentity
     writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify(meta))
   }
   return root
 }
+
+// Descriptor identities come from registered carrier code, never caller input
+// or the transient CLI lease targetIdentity.
+test('schema3 requires exact saved carrier descriptor and rejects direct lookalikes', (t) => {
+  registerFixtureCarrier(t)
+  const meta = { schemaVersion: 3, transport: 'ssh', machineId: 'carrier', connectorTargetIdentity: 'canonical-target', host: 'localhost', port: 22, username: 'root' }
+  const carrier = { id: 'carrier', transport: 'ssh', connector: fixtureConnector(), host: 'localhost', port: 22, username: 'root' }
+  const direct = { id: 'direct', host: 'localhost', port: 22, username: 'root' }
+  assert.equal(machineForMirror(meta, [direct, carrier]).record, carrier)
+  const forged = { ...carrier, connector: { ...fixtureConnector(), targetIdentity: 'runtime-lease-target' } }
+  assert.equal(machineForMirror(meta, [forged]).record, forged, 'caller identity cannot override the canonical descriptor')
+  for (const bad of [
+    { ...carrier, id: 'other' },
+    { ...carrier, connector: undefined },
+    { ...carrier, connector: {} },
+    { ...carrier, connector: [] },
+    { ...carrier, connector: { kind: 'INVALID', targetIdentity: 'canonical-target' } },
+    { ...carrier, connector: fixtureConnector('other-target') },
+    { ...carrier, connector: { kind: 'unregistered', config: { target: 'canonical-target' }, targetIdentity: 'canonical-target' } },
+    { ...carrier, connector: { kind: 'route-fixture', targetIdentity: 'canonical-target' } },
+    { ...carrier, connector: fixtureConnector(' ') },
+    { ...carrier, connector: fixtureConnector(42) },
+    { ...carrier, connector: { ...fixtureConnector('other-target'), targetIdentity: 'canonical-target' } },
+    { ...carrier, transport: 'vscode-tunnel' },
+  ]) assert.equal(machineForMirror(meta, [direct, bad]), null)
+  for (const bad of [
+    { ...meta, machineId: '' }, { ...meta, machineId: 42 },
+    { ...meta, connectorTargetIdentity: ' ' }, { ...meta, transport: undefined },
+    { ...meta, schemaVersion: 4 }, { ...meta, schemaVersion: '3' },
+  ]) assert.equal(machineForMirror(bad, [direct, carrier]), null)
+  const legacy = { host: 'localhost', port: 22, username: 'root' }
+  assert.equal(machineForMirror(legacy, [carrier, { ...direct, id: 'tunnel', transport: 'vscode-tunnel' }, direct]).record, direct)
+  assert.equal(machineForMirror(legacy, [carrier, { ...direct, connector: null }]).record, null)
+})
+
+test('schema3 remote scan preserves strict markers and preference uses saved descriptor identity', (t) => {
+  registerFixtureCarrier(t)
+  const common = { base: 'proj', host: 'localhost', port: 22, username: 'root', remotePath: '/proj', schemaVersion: 3, transport: 'ssh', connectorTargetIdentity: 'canonical-target' }
+  const root = makeMirrorRoot([
+    { ...common, tag: 'a', machineId: 'one' },
+    { ...common, tag: 'b', machineId: 'two' },
+    { ...common, tag: 'broken', machineId: 'broken', connectorTargetIdentity: null },
+  ])
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const scanned = findMirrorsForRemotePath(root, '/proj/child')
+  assert.equal(scanned.length, 3)
+  assert.equal(scanned[0].schemaVersion, 3)
+  assert.equal(scanned[0].connectorTargetIdentity, 'canonical-target')
+  assert.equal(machineForMirror(scanned.find(m => m.machineId === 'broken'), []), null)
+  const current = { id: 'two', connector: fixtureConnector() }
+  assert.equal(pickMirrorForRemotePath(root, '/proj', current).machineId, 'two')
+  for (const connector of [
+    { kind: 'unregistered', targetIdentity: 'canonical-target' },
+    { kind: 'route-fixture', targetIdentity: 'canonical-target' },
+    { ...fixtureConnector('other-target'), targetIdentity: 'canonical-target' },
+  ]) assert.equal(pickMirrorForRemotePath(root, '/proj', { ...current, connector }, m => m.machineId === 'one').machineId, 'one', 'invalid/forged carrier cannot claim current-machine preference')
+  // A triple lookalike cannot claim strict origins as its current-machine match.
+  assert.equal(pickMirrorForRemotePath(root, '/proj', { host: 'localhost', port: 22, username: 'root' }, m => m.machineId === 'two').machineId, 'two')
+})
+
+test('schema3 fails closed when registered carriers lack a usable identity function', (t) => {
+  const meta = { schemaVersion: 3, transport: 'ssh', machineId: 'carrier', connectorTargetIdentity: 'canonical-target' }
+  for (const [kind, targetIdentity] of [
+    ['route-no-identity', undefined], ['route-empty-identity', () => ' '],
+    ['route-invalid-identity', () => 42], ['route-throwing-identity', () => { throw new Error('malformed config') }],
+  ]) {
+    t.after(registerSshCarrier({ id: kind, acquire() {}, targetIdentity }))
+    assert.equal(machineForMirror(meta, [{ id: 'carrier', connector: { kind, targetIdentity: 'canonical-target' } }]), null)
+  }
+})
 
 test('normalizeRoutePath collapses slashes and trims the trailing separator', () => {
   assert.equal(normalizeRoutePath('/a/b/'), '/a/b')

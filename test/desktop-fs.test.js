@@ -84,6 +84,49 @@ test('sidebar write 409 on mtime mismatch, then save after re-read (Desktop edit
   assert.equal(fs.readFileSync('/proj/a.txt').toString(), 'merged')
 })
 
+test('carrier sidebar staged save commits atomically and reports precommit conflict', async () => {
+  const fs = new MemFs()
+  seed(fs, { 'proj/a.txt': 'v1' })
+  const base = makeSftp(fs)
+  let renames = 0, race = false
+  const sftp = { ...base,
+    lstat: async p => { try { return { ...await base.stat(p), mode: 0o100600 } } catch { throw Object.assign(new Error('missing'), { code: 2 }) } },
+    chmod: async () => {},
+    atomicRename: async (a, b) => { renames++; return base.rename(a, b) },
+    writeFile: async (p, bytes) => { await base.writeFile(p, bytes); if (race) fs.writeFileSync('/proj/a.txt', 'other-writer') },
+  }
+  const routes = routesFor(sftp, { ws: '/proj', carrier: true, bound: true })
+  const saved = await call(routes['/dsh-remote/write'], { body: { path: '/proj/a.txt', content: 'saved', expectedContent: 'v1', sessionId: 's1' } })
+  assert.equal(saved.status, 200)
+  assert.equal(renames, 1)
+  assert.equal(fs.readFileSync('/proj/a.txt').toString(), 'saved')
+  race = true
+  const conflict = await call(routes['/dsh-remote/write'], { body: { path: '/proj/a.txt', content: 'must-not-commit', expectedContent: 'saved', sessionId: 's1' } })
+  assert.equal(conflict.status, 409)
+  assert.equal(conflict.json.code, 'conflict')
+  assert.equal(renames, 1)
+  assert.equal(fs.readFileSync('/proj/a.txt').toString(), 'other-writer')
+})
+
+test('carrier sidebar reports unknown commit without replaying rename', async () => {
+  const fs = new MemFs()
+  seed(fs, { 'proj/a.txt': 'before' })
+  const base = makeSftp(fs)
+  let commits = 0
+  const sftp = { ...base,
+    lstat: async p => { try { return { ...await base.stat(p), mode: 0o100600 } } catch { throw Object.assign(new Error('missing'), { code: 2 }) } },
+    chmod: async () => {},
+    atomicRename: async (a, b) => { commits++; await base.rename(a, b); throw Object.assign(new Error('rename acknowledgement timed out'), { code: 'ETIMEDOUT' }) },
+  }
+  const routes = routesFor(sftp, { ws: '/proj', carrier: true, bound: true })
+  const saved = await call(routes['/dsh-remote/write'], { body: { path: '/proj/a.txt', content: 'complete-new', expectedContent: 'before', sessionId: 's1' } })
+  assert.equal(saved.status, 500)
+  assert.equal(saved.json.code, 'write-outcome-unknown')
+  assert.equal(saved.json.outcomeUnknown, true)
+  assert.equal(commits, 1)
+  assert.equal(fs.readFileSync('/proj/a.txt').toString(), 'complete-new')
+})
+
 test('sidebar /ls returns session-bound listing from the resolved pool', async () => {
   const fs = new MemFs()
   seed(fs, { 'proj/src/a.ts': 'x' })

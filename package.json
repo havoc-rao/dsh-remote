@@ -29,6 +29,8 @@
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./lib/provider.js": "./lib/provider.js",
+    "./lib/ssh-carrier.js": "./lib/ssh-carrier.js",
+    "./lib/ssh-carrier-pool.js": "./lib/ssh-carrier-pool.js",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },

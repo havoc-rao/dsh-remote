@@ -18,9 +18,8 @@ import path from 'node:path'
 import { registerProvider } from '../lib/provider.js'
 
 /** 隔离 DSH_HOME：一台已存机器（machines.json）+ 归属它的 mirror。
- *  tunnel 机器用 43127 本地转发端口（task 背景允许的两种形态之一）：mirrorEntries
- *  要求 meta 端口 1..65535，且 bindingFor → machineByTarget 必须命中已存记录，
- *  机器记录的 transport 才会进 provider 分派。 */
+ *  tunnel 机器用 43127 本地转发端口；非 SSH 镜像必须记录 v2 transport/machineId，
+ *  不能靠旧 v1 localhost 三元组推断 Provider 身份。 */
 function makeHome(machine) {
   const home = mkdtempSync(path.join(tmpdir(), 'dsh-provider-wiring-'))
   const root = path.join(home, 'remote-workspaces')
@@ -31,6 +30,7 @@ function makeHome(machine) {
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify({
     host: machine.host, port, username: machine.username || '',
+    ...(machine.transport && machine.transport !== 'ssh' ? { schemaVersion: 2, transport: machine.transport, machineId: machine.id } : {}),
     remotePath: machine.workspace || '/srv/t',
   }))
   return { home, cwd: dir }
@@ -43,7 +43,14 @@ function makeCtx() {
   return {
     ctx: {
       inject(names, callback) { if (names.every((name) => this.get(name))) callback(this) },
-      effect: (fn) => { disposers.push(fn); return () => {} },
+      effect: (fn, label) => {
+        if (label === 'dsh-remote.routePools') {
+          const cleanup = fn() // Cordis executes setup immediately, collects returned disposer.
+          assert.equal(typeof cleanup, 'function')
+          disposers.push(cleanup)
+        } else disposers.push(fn)
+        return () => {}
+      },
       get: () => undefined,
       tools: { register: (t) => tools.set(t.name, t) },
       systemPrompt: { section: () => {} },
@@ -271,7 +278,7 @@ test('② credentialResolver 被调用：明文密码路径与 tunnel.secret 回
   })
 })
 
-test('③ 同 machineId 二次取用命中缓存（fake connect 只调一次；id 缺失时 remoteIdentity.machineId 兜底键）', async () => {
+test('③ 同 machineId 二次取用命中缓存；缺失稳定 id 的镜像拒绝而不猜测远端身份', async () => {
   // (a) 常规记录：m.id 作键。
   await runWith(fakeProvider(), async (fake) => {
     const machine = tunnelMachine()
@@ -292,8 +299,8 @@ test('③ 同 machineId 二次取用命中缓存（fake connect 只调一次；i
     }
   })
 
-  // (b) 无 id 记录 → 键回落 m.tunnel.remoteIdentity.machineId（'vscode-tunnel:rmt-9'），
-  //     同样两次取用只建连一次。
+  // (b) A saved registry record without stable id cannot own a v2 mirror.
+  // Runtime provider fallback keys must not bypass registry authorization.
   await runWith(fakeProvider(), async (fake) => {
     const machine = tunnelMachine({ id: undefined })
     const { home, cwd } = makeHome(machine)
@@ -303,9 +310,10 @@ test('③ 同 machineId 二次取用命中缓存（fake connect 只调一次；i
       await apply(ctx, { ...CONFIG })
       const r1 = await runTool(tools, 'rw_exec', { command: 'echo a' }, cwd)
       const r2 = await runTool(tools, 'rw_exec', { command: 'echo b' }, cwd)
-      assert.ok(r1.ok, r1.error)
-      assert.ok(r2.ok, r2.error)
-      assert.equal(fake.state.connectCount, 1, 'remoteIdentity.machineId 兜底键也必须缓存命中')
+      assert.equal(r1.ok, false)
+      assert.equal(r2.ok, false)
+      assert.match(r1.error, /not saved|cannot bind/)
+      assert.equal(fake.state.connectCount, 0, 'missing owner id must never acquire a provider')
     } finally {
       delete process.env.DSH_HOME
       rmSync(home, { recursive: true, force: true })

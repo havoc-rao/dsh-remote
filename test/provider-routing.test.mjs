@@ -26,6 +26,7 @@ function makeHome(machine) {
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, '.dsh-remote-meta.json'), JSON.stringify({
     host: machine.host, port: Number(machine.port) || 22, username: machine.username || 'root',
+    ...(machine.transport && machine.transport !== 'ssh' ? { schemaVersion: 2, transport: machine.transport, machineId: machine.id } : {}),
     remotePath: '/data/mirror',
   }))
   return { home, cwd: dir }

@@ -6,6 +6,9 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { loadMachines } from '../lib/registry.js'
 import { apply } from '../lib/index.js'
+import { isStrictSshMirror, strictSshMirrorIdentity } from '../lib/route-machine.js'
+import { createHash } from 'node:crypto'
+import { registerSshCarrier, sshConnectorTargetIdentity } from '../lib/ssh-carrier.js'
 
 const host = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
@@ -24,7 +27,9 @@ function mirrorCode(root) {
   const start = host.indexOf('function mirrorRootFor(')
   const end = host.indexOf('/** Recursive directory copy', start)
   const ctx = vm.createContext({ ...fs, path, _loadMachines: loadMachines, remoteWorkspacesRoot: () => root,
-    remotePathBase: path.posix.basename, normalizeRemotePath: (p) => p, shortHash: () => 'hash' })
+    remotePathBase: path.posix.basename, normalizeRemotePath: (p) => p,
+    isStrictSshMirror, strictSshMirrorIdentity, sshConnectorTargetIdentity,
+    shortHash: value => createHash('sha256').update(value).digest('hex').slice(0, 12) })
   vm.runInContext(host.slice(start, end), ctx)
   return ctx
 }
@@ -45,6 +50,44 @@ test('mirror origin preserves SSH username/port and only valid project directori
   assert.equal(ctx.mirrorMatchOf(dir).port, 2202)
   // Compatibility is read-only: preserve the user's existing mirror data.
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.dsh-remote-meta.json'))).username, 2202)
+})
+
+test('all mirror writers share stable origin construction with correct registry id', t => {
+  const { root } = fixture(t)
+  const ctx = mirrorCode(root)
+  const dispose = registerSshCarrier({ id: 'origin-fixture', targetIdentity: c => JSON.stringify([c.kind, c.target]), acquire() {} })
+  t.after(dispose)
+  const origin = ctx.mirrorOriginOf({ host: 'trap', port: 50736, machine: { id: 'mac-b', username: 'remote', connector: { kind: 'origin-fixture', target: 'b' } } })
+  assert.equal(origin.machineId, 'mac-b')
+  assert.equal(origin.schemaVersion, 3)
+  assert.equal(origin.host, undefined)
+  assert.equal(origin.port, undefined)
+  assert.equal(origin.connectorTargetIdentity, '["origin-fixture","b"]')
+  const legacyTunnel = ctx.mirrorOriginOf({ host: '127.0.0.1', port: 0, username: '', machine: { id: 'tunnel-b', transport: 'vscode-tunnel', tunnel: { remoteIdentity: 'remote-b' } } })
+  assert.equal(legacyTunnel.machineId, 'tunnel-b')
+  assert.equal(legacyTunnel.remoteIdentity, 'remote-b')
+  assert.ok(host.includes('ensureMirror(p, mirrorOriginOf(ctx)'))
+})
+
+test('schema3 mirror writer never persists endpoint and separates stable targets', t => {
+  const { root } = fixture(t)
+  const ctx = mirrorCode(root)
+  const origin = { schemaVersion: 3, transport: 'ssh', machineId: 'mac-a', connectorTargetIdentity: '["devtunnel","one.jpe1",22]', username: 'remote', host: '127.0.0.1', port: 50736 }
+  const dir = ctx.ensureMirror('/srv/project', origin)
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, '.dsh-remote-meta.json'), 'utf8'))
+  assert.equal(meta.schemaVersion, 3)
+  assert.equal(meta.machineId, 'mac-a')
+  assert.equal(meta.connectorTargetIdentity, origin.connectorTargetIdentity)
+  assert.equal(meta.host, undefined)
+  assert.equal(meta.port, undefined)
+  const match = ctx.mirrorMatchOf(path.join(dir, 'src'))
+  assert.equal(match.schemaVersion, 3)
+  assert.equal(match.machineId, 'mac-a')
+  assert.equal(match.connectorTargetIdentity, origin.connectorTargetIdentity)
+  assert.equal(ctx.mirrorDirFor('/srv/project', { ...origin, port: 64894 }), dir)
+  assert.notEqual(ctx.mirrorDirFor('/srv/project', { ...origin, machineId: 'mac-b' }), dir)
+  assert.notEqual(ctx.mirrorDirFor('/srv/project', { ...origin, connectorTargetIdentity: 'different-target' }), dir)
+  assert.throws(() => ctx.ensureMirror('/srv/project', { ...origin, machineId: '' }), /invalid strict/)
 })
 
 test('ensureMirror v1 meta stays byte-for-byte the legacy ssh JSON (no v2 keys, same key order)', (t) => {
@@ -160,9 +203,9 @@ test('creating a mirror binds the new workspace, leaving the source workspace un
   const end = host.indexOf('\n    {', start)
   const context = vm.createContext({
     normalizeRemotePath: (p) => p, readBody: async () => JSON.stringify({ path: '/srv/b', machine: 'b', workspace: '/local/a' }),
-    ctxForCwd: () => ({}), machineIndex: () => 0, machines: [machine],
+    ctxForCwd: () => ({}), hasRemoteTarget: c => !!c.host || !!c.machine?.connector, machineIndex: () => 0, machines: [machine],
     machinePoolOf: async () => ({}), isRemoteDirOn: async () => true,
-    ensureMirror: mirrors.ensureMirror, persistWorkspace: (p, cwd) => persisted.push(cwd), startAutoPush: () => {}, status: () => ({}),
+    ensureMirror: mirrors.ensureMirror, mirrorOriginOf: mirrors.mirrorOriginOf, persistWorkspace: (p, cwd) => persisted.push(cwd), startAutoPush: () => {}, status: () => ({}),
     sendJson: (_res, code, body) => ({ code, body }),
   })
   const route = vm.runInContext('({' + host.slice(start, end).trim().replace(/,$/, '') + ')', context)
@@ -180,6 +223,7 @@ test('terminal handshake derives its target from the workspace and refuses misma
     '/mirror/a': { source: 'mirror', mirrorDir: '/mirror/a', machineId: 'a', workspace: '/srv/a' },
     '/mirror/b': { source: 'mirror', mirrorDir: '/mirror/b', machineId: 'b', workspace: '/srv/b' },
     '/local': { source: 'selection', machineId: 'b', workspace: '/srv/b' },
+    '/carrier': { source: 'mirror', machineId: 'c', workspace: '/srv/c', machine: { connector: { kind: 'devtunnel' } } },
   }
   function resolve(workspace, machine, sessionId = '') {
     const params = { machine, cwd: '/untrusted-cwd', resume: 'same-tab' }
@@ -196,4 +240,5 @@ test('terminal handshake derives its target from the workspace and refuses misma
   assert.throws(() => resolve('/mirror/a', 'b'), /machine does not match/)
   assert.throws(() => resolve('/mirror/b', 'b', 'a'), /workspace does not match session/)
   assert.throws(() => resolve('', ''), /requires a valid remote mirror/)
+  assert.throws(() => resolve('/carrier', 'c'), /managed workspace-terminal/ )
 })
