@@ -337,4 +337,4 @@ See [CHANGELOG.md](./CHANGELOG.md).
 
 **Local fork extensions**
 
-This fork retains per-workspace remote contexts, better-sidebar multi-root trees, remote Git, SSH terminals, and transport Provider / vscode-tunnel extensions. See [AGENTS.md](AGENTS.md) and [development notes](docs/develop.md) for DCF and development workflows.
+This fork retains per-workspace remote contexts, better-sidebar multi-root trees, remote Git, SSH terminals, and transport Provider extensions. See [AGENTS.md](AGENTS.md) and [development notes](docs/develop.md) for DCF and development workflows.

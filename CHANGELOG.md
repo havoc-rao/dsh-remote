@@ -2,6 +2,20 @@
 
 All notable changes to **dsh-remote**.
 
+## Unreleased
+### 移除设置页的「VS Code Tunnel」传输（dsh-remote-vscode 退役）
+
+dsh-remote-vscode（以 vscode-tunnel 传输接入底座的那个插件）已停用，它留在本插件设置页里的
+入口随之删除：机器表单不再有 `VS Code Tunnel` 类型、`Tunnel ID / Cluster / Machine ID /
+配对秘密` 四个字段，机器列表也不再渲染隧道行/隧道 chip。**Dev Tunnel SSH（SSH carrier、
+由 dsh-devtunnel-ssh 注册使用）与它的表单、镜像按钮、能力门完全保留**；端口转发在 carrier
+机器上依旧禁用（原先只挡 vscode-tunnel，现已改为按 `connector` 判定，对 Dev Tunnel 生效）。
+
+宿主侧只移除 UI 与入口，**不动公开 Provider 扩展点（ADR-0002）**：`provider.js` /
+`registry.js` / `machinePoolOf` 的非 ssh 分派、以及 `transport: 'vscode-tunnel'` 的
+机器记录与 mirror meta v2 读取路径都原样保留，存量记录/镜像不会被迁移或破坏；
+`ssh-carrier*` 与 `experimentalSshCarrier` 一条未动。
+
 ## 0.8.36 — 2026-10-03
 ### 自动部署远端 dsh 并验证（体检 → 一键装 → 交给 AI 兜底）+ 新增 `rw_deploy_probe`
 

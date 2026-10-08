@@ -318,4 +318,4 @@ MIT
 
 **本地分支扩展**
 
-本地分支保留按工作区隔离的远程上下文、better-sidebar 多根文件树、远程 Git 数据源、SSH 终端与传输 Provider / vscode-tunnel 扩展。开发与 DCF 注入流程见 [AGENTS.md](AGENTS.md) 和 [开发说明](docs/develop.md)。
+本地分支保留按工作区隔离的远程上下文、better-sidebar 多根文件树、远程 Git 数据源、SSH 终端与传输 Provider 扩展。开发与 DCF 注入流程见 [AGENTS.md](AGENTS.md) 和 [开发说明](docs/develop.md)。

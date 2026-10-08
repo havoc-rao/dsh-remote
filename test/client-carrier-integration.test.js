@@ -91,13 +91,12 @@ test('carrier validation rejects non-loopback endpoints, invalid ids, fingerprin
   assert.equal(context.devTunnelFormValid({ ...valid, useAgent: false, privateKeyPath: '/keys/dev' }), true)
 })
 
-test('unavailable carrier disables selection and useNow while direct SSH and Bridge stay available', async () => {
+test('unavailable carrier disables the carrier entry and useNow while direct SSH stays available', async () => {
   for (const status of [null, { sshCarrierCapabilities: { workspaceSupported: false, carrierIds: ['devtunnel'] } }, { sshCarrierCapabilities: { workspaceSupported: true, carrierIds: [] } }]) {
     const h = harness(status); await h.mount()
     assert.equal(h.button('Dev Tunnel SSH').props.disabled, true)
     assert.equal(h.button('settings.setCurrent').props.disabled, true)
     assert.equal(h.button('SSH').props.disabled, false)
-    assert.equal(h.button('VS Code Tunnel').props.disabled, false)
   }
 })
 
