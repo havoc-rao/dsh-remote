@@ -227,7 +227,7 @@ test('native right-sidebar attaches late, opens a session-scoped remote file, an
 })
 
 for (const protocol of ['https:', 'dsh-app:']) {
-  test(`${protocol} chooses its API carrier before sending requests`, async (t) => {
+  test(`${protocol} preserves exact plugin HTTP paths before sending requests`, async (t) => {
     const { plugin, requests } = loadClient(protocol)
     const host = createHost()
     t.after(() => host.ctx.dispose())
@@ -236,12 +236,10 @@ for (const protocol of ['https:', 'dsh-app:']) {
     host.services.set('betterSidebar', bs)
     bs.emit('test-session')
     await new Promise((resolve) => setImmediate(resolve))
-    // apply() additionally probes /dsh-remote/slot-config once (sidebar seat
-    // key resolution); every request must ride the chosen carrier prefix.
-    const prefix = protocol === 'dsh-app:' ? '/api' : ''
+    // Desktop forwarding preserves pathname; plugin routes are not RPC /api.
     assert.ok(requests.length >= 2, 'slot-config probe + session resolve expected')
-    assert.ok(requests.every((r) => r.url.startsWith(prefix + '/dsh-remote/')), requests.map((r) => r.url).join(','))
-    assert.ok(requests.some((r) => r.url === prefix + '/dsh-remote/resolve-mirror?sessionId=test-session'))
+    assert.ok(requests.every((r) => r.url.startsWith('/dsh-remote/')), requests.map((r) => r.url).join(','))
+    assert.ok(requests.some((r) => r.url === '/dsh-remote/resolve-mirror?sessionId=test-session'))
   })
 }
 
