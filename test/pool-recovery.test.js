@@ -6,6 +6,25 @@ import { SshPool } from '../lib/pool.js'
 import { registerSshCarrier } from '../lib/ssh-carrier.js'
 import { createCarrierSshPool } from '../lib/ssh-carrier-pool.js'
 
+test('passive marker exec never detects, connects or replays channel failures', async () => {
+  const f = fixture()
+  let detects = 0
+  f.pool.detect = () => { detects++; throw new Error('must not detect') }
+  await assert.rejects(f.pool.exec('git status', { passive: true }), /not connected or not ready/)
+  f.pool.platform = 'posix'
+  const request = assert.rejects(f.pool.exec('git status', { passive: true }), /ssh exec failed/)
+  await tick()
+  f.callbacks[0](failure())
+  await request
+  assert.equal(detects, 0)
+  assert.equal(f.stats.connects, 0)
+  assert.equal(f.callbacks.length, 1)
+  f.pool.client = null
+  await assert.rejects(f.pool.exec('git status', { passive: true }), /not connected/)
+  assert.equal(f.stats.connects, 0)
+  f.pool.close()
+})
+
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }
 const failure = () => new Error('Channel open failure: open failed')
 

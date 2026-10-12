@@ -113,6 +113,16 @@ Independent plugin actual experimental tarball produced in its own `.dsh/artifac
 
 Independent read-only audit identified reconnect strict-orphan fallback, carrier reconnect cache refresh, and asynchronous close ordering. Fixed: strict orphan/malformed owner reconnect terminates, explicit carrier reconnect invalidates owned cache, factory awaits async close before releasing reachability even on failure. Presence-vs-truthiness gates hardened so null connector cannot downgrade/probe/deploy as direct SSH. Added regression tests (2 route guards and 10 carrier lifecycle tests pass); no remaining proven pin bypass/browser leak in scoped audit. Final audited all-suite rerun: 680 pass, 0 fail, 2 credential skips (682 total, exit 0).
 
+## Git workspace display protocol
+
+Schema3 carrier mirrors continue to use dsh-remote's Git workspace route.
+The producer now emits an additive versioned, transport-neutral machine
+identity/display projection, preserving `host:string` (empty for carriers)
+after JSON serialization without exposing a transient localhost endpoint.
+See [Git workspace marker contract](<git-workspace-contract.md>) for exact
+fields, legacy compatibility and consumer rendering rules. This machine
+projection version is independent of the schema3 mirror ownership version.
+
 ## Remaining gates
 
 See [integration audit](<ssh-carrier-integration-audit.md>): stable mirrors, machine CRUD, all dial entrypoints, lookup fences, probe cleanup, pool invalidation and terminal ownership must be complete before exposing connector machines to normal sessions. Registry/factory capability is not equivalent to that end-to-end capability.

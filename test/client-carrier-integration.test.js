@@ -166,7 +166,7 @@ function harness(status = supported, cwd = '/local/source', savedMachine = machi
         const e = registrations.get(OPT + ':id:' + id)
         if (e) slotCalls.push({ e, owner, inst: OPT + ':' + id })
       }
-    } else if (key_ === PNLP) {
+    } else if (key_ === 'settings.remote.machine.transport.panel') {
       const e = registrations.get(PNLP + ':id:devtunnel-ssh')
       if (e) slotCalls.push({ e, owner, inst: PNLP + ':id:devtunnel-ssh' })
     } else {
@@ -255,45 +255,49 @@ test('slots: SSH entry renders the type button and the declared slot seats', asy
   assert.equal(children['settings.remote.machine.transport.panel'].scope, 'root')
 })
 
-test('panel slot: occupant receives the live registry/scope state and mounts between the two cards', async () => {
+test('panel slot: occupant receives the live registry/scope state and dispatches service and diagnostic sections independently', async () => {
   const h = harness(); await h.mount()
   const p = h.panelProps
   assert.ok(p, 'the panel slot dispatched to the registered occupant entry')
-  assert.deepEqual(Object.keys(p).sort(), ['busy', 'currentId', 'machines', 'scopeDir', 'status'].sort())
+  assert.deepEqual(Object.keys(p).sort(), ['busy', 'currentId', 'machines', 'scopeDir', 'status', 'tunnel', 'section'].sort())
   assert.equal(p.status.sshCarrierCapabilities.workspaceSupported, true, 'live scope status')
   assert.equal(p.machines.length, 1)
   assert.equal(p.machines[0].id, 'carrier-1')
   assert.equal(p.currentId, '')
   assert.equal(p.scopeDir, '/local/source')
   assert.equal(p.busy, false)
-  // Placement: the owner's renderSlot call sits as an element between the machines
-  // card and the add/edit card, and the entry itself renders (once) right there.
+  // Contract v3: the global settings state machine rides the same owner props,
+  // so the occupant renders the settings card instead of the owner page.
+  assert.equal(typeof p.tunnel, 'object', 'owner publishes useTunnelSettings through the panel props')
+  assert.equal(typeof p.tunnel.saveTunnelSettings, 'function')
+  assert.equal(typeof p.tunnel.preflightTunnel, 'function')
+  assert.equal(p.section, 'services')
   assert.deepEqual(h.entryOrder(), ['panel'])
-  const page = h.render()
-  const kids = (Array.isArray(page.children) ? page.children : []).filter(Boolean)
-  const slotIndex = kids.findIndex((n) => n && n.props && n.props['data-slot'] === 'settings.remote.machine.transport.panel')
-  const machinesCard = kids.findIndex((n) => n && n.type === 'div' && n.props && n.props.className === 'rws-card' && nodesOf(n).some((x) => x.props && x.props.style && x.props.style.fontSize === 13 && x.children && x.children[0] === 'T:settings.machines'))
-  const editCard = kids.findIndex((n) => n && n.type === 'div' && n.props && n.props.className === 'rws-card' && nodesOf(n).some((x) => x.children && (x.children[0] === 'T:settings.addMachine' || x.children[0] === 'T:settings.editMachine')))
-  assert.ok(machinesCard >= 0 && slotIndex >= 0 && editCard >= 0, 'both cards and the panel seat are top-level children')
-  assert.ok(machinesCard < slotIndex && slotIndex < editCard, 'panel sits after the machines card and before the add/edit card')
-  // The owner adds no wrapper card of its own (the occupant renders its own box).
-  assert.equal(kids[slotIndex].props.className, undefined, 'owner must not wrap the panel slot in rws-card')
-  // Full-width single row: the occupant box appears exactly once in the rendered text.
-  assert.equal(h.text().split('T:settings.panelStub').length - 1, 1)
+  let page = h.render()
+  assert.equal(nodesOf(page).find(n => n.props['data-testid'] === 'remote-machine-editor').props.hidden, true)
+  let machinePanel = nodesOf(page).find(n => n.props.id === 'remote-panel-machines')
+  assert.equal(machinePanel.props.hidden, false)
+  const children = machinePanel.children.flat().filter(Boolean)
+  const editorIndex = children.findIndex(n => n.props && n.props['data-testid'] === 'remote-machine-editor')
+  const panelIndex = children.findIndex(n => n.props && n.props['data-slot'] === 'settings.remote.machine.transport.panel')
+  assert.ok(editorIndex >= 0 && panelIndex === editorIndex + 1, 'Dev Tunnel sits immediately below the editor box')
+  h.button('settings.tabDiagnostics').props.onClick(); page = h.render()
+  assert.equal(h.panelProps.section, 'diagnostics')
+  assert.equal(nodesOf(page).find(n => n.props.id === 'remote-panel-machines').props.hidden, true)
+  assert.equal(nodesOf(page).find(n => n.props.id === 'remote-panel-diagnostics').props.hidden, false)
+  h.button('settings.tabMachines').props.onClick(); h.render()
+  h.button('settings.addMachine').props.onClick(); page = h.render()
+  assert.equal(nodesOf(page).find(n => n.props['data-testid'] === 'remote-machine-editor').props.hidden, false)
+  const editCard = nodesOf(page).find(n => n.props.className === 'rws-card' && nodesOf(n).some(x => x.children && x.children[0] === 'T:settings.transportLabel'))
+  assert.ok(editCard)
 })
 
-test('panel slot: an absent occupant leaves no placeholder node between the cards', async () => {
+test('panel slot: an absent occupant leaves machines usable', async () => {
   const h = harness(supported, '/local/source', machine, { panel: false }); await h.mount()
-  assert.equal(h.panelProps, null, 'no occupant entry was registered')
-  const page = h.render()
-  const kids = (Array.isArray(page.children) ? page.children : []).filter(Boolean)
-  assert.equal(kids.some((n) => n && n.props && n.props['data-slot'] === 'settings.remote.machine.transport.panel'), false,
-    'an owner with no renderer keeps the section child declared call from emitting a node')
-  // The two cards stay adjacent, exactly as before the panel slot existed.
-  const machinesCard = kids.findIndex((n) => n && n.type === 'div' && n.props && n.props.className === 'rws-card' && nodesOf(n).some((x) => x.props && x.props.style && x.props.style.fontSize === 13 && x.children && x.children[0] === 'T:settings.machines'))
-  const editCard = kids.findIndex((n) => n && n.type === 'div' && n.props && n.props.className === 'rws-card' && nodesOf(n).some((x) => x.children && (x.children[0] === 'T:settings.addMachine' || x.children[0] === 'T:settings.editMachine')))
-  assert.ok(machinesCard >= 0 && editCard === machinesCard + 1, 'no node between the machines card and the add/edit card')
+  assert.equal(h.panelProps, null)
   assert.doesNotMatch(h.text(), /panelStub/)
+  assert.ok(h.button('settings.addMachine'))
+  assert.ok(h.button('settings.edit'))
 })
 
 test('gating: the carrier shape is decided by form.transport, never by body.transport', async () => {

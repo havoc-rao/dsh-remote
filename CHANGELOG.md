@@ -3,6 +3,25 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 常驻隧道（Resident Tunnel）全局设置对接（dsh-devtunnel-ssh 兼容）
+
+配合 dsh-devtunnel-ssh「全局单通道常驻」能力落地 remote 侧配合面：
+
+- `useTunnelSettings` 的 `/settings` POST body 由 5 键扩为 **恰好 8 键**（新增
+  `residentTunnelId` / `residentRemotePort` / `residentMode`）；GET 快照自动读入
+  三值，legacy 磁盘记录缺省 `'' / 0 / 'off'`，无需迁移。
+- 全局设置卡新增「常驻通道」区：模式三选（off / immediate / lazy）、Tunnel ID
+  文本框与远端端口数字输入（白名单正则/取值范围与兄弟仓 validateSettings 同源）；
+  off 时输入禁用、保存归一化 `'' / 0`。
+- 新增 `/dsh-devtunnel-ssh/channels` 只读消费点：展示常驻状态
+  （ready/starting、租用会话数、代数）；blocked/exhausted 时展示毒化代码并提示
+  「修改任意设置并保存以重建监督器」（状态码经 `^[A-Z][A-Z0-9_]{0,79}$` 白名单
+  过滤，SECRETS 原则：绝不渲染服务端/内部任意文本）。
+- 常驻激活中更改模式或隧道参数时沿用 disconnectActive 确认流（服务端
+  `SETTINGS_ACTIVE_CONFIRM_REQUIRED` 的父侧预判，409 文案仍兜底）；immediate
+  保存确认文案明示「保存后立即启动并保持 connect 进程」。
+- 渠道状态读取失败静默，不阻塞设置读写主流程；拒绝用「未启用」误导掩盖毒化失败。
+
 ### 移除设置页的「VS Code Tunnel」传输（dsh-remote-vscode 退役）
 
 dsh-remote-vscode（以 vscode-tunnel 传输接入底座的那个插件）已停用，它留在本插件设置页里的
