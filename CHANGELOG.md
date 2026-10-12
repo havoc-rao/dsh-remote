@@ -3,6 +3,22 @@
 All notable changes to **dsh-remote**.
 
 ## Unreleased
+### 合入官方 0.8.37–0.8.43（本 fork 版本顺延为 0.8.44）
+
+- 官方发布线全部并入：`rw_connect` 补全字段透传（passphrase / useAgent /
+  keyboardInteractive / hostKeyMode / name，缺省不覆盖已存密值）并新增
+  `machineId` 直连（issue #48）——**按本 fork 语义落地**：绑定当前会话工作区而非
+  全局 current，拨号失败回滚绑定不留幻影；`rw_machines` 列出已存机器。
+- issue #48 宿主崩溃修复：ssh2 同步解析私钥抛错不再击穿进程（pool 的
+  `client.connect` 纳入 try/catch）。
+- issue #49 会话列表远程标记（绿点 + 悬停主机 + 标题栏 chip）：宿主
+  `GET /dsh-remote/bindings` 一次返回整张镜像登记表；客户端注入三处 side slot，
+  与 fork 的受限守卫版原生侧栏注册共存（不再重复注册）。
+- 备份/恢复（rw_backup/rw_restore，0.8.40）随官方 0.8.41 一并移除，官方
+  0.8.41/0.8.42 的部署与挂载修复、0.8.37 自动更新热切换修复、0.8.39 设置页
+  热重载保留皆在；`react` 进入 devDependencies（settings-render 测试需要）。
+- 版本号 0.8.36 → **0.8.44**（继续官方版本序列，CK 首个发布用）。
+
 ### 常驻隧道（Resident Tunnel）全局设置对接（dsh-devtunnel-ssh 兼容）
 
 配合 dsh-devtunnel-ssh「全局单通道常驻」能力落地 remote 侧配合面：
@@ -34,6 +50,283 @@ dsh-remote-vscode（以 vscode-tunnel 传输接入底座的那个插件）已停
 `registry.js` / `machinePoolOf` 的非 ssh 分派、以及 `transport: 'vscode-tunnel'` 的
 机器记录与 mirror meta v2 读取路径都原样保留，存量记录/镜像不会被迁移或破坏；
 `ssh-carrier*` 与 `experimentalSshCarrier` 一条未动。
+
+## 0.8.43 — 2026-10-11
+### 会话列表里一眼看出「这是远程会话，连的是哪台机」（issue #49）
+
+以前侧栏的会话行长得都一样：**分不清一个会话是本机的还是远程的，更不知道它连的是哪台机**。
+现在远程会话多了一个绿点，悬停能看到主机与远端路径，当前会话的标题栏还会常显一个主机标签。
+
+- **会话行前导位（16px 单元格）一个绿点** —— 与 DSH 自带的「定时任务」时钟标记共用同一个座位：
+  行处于空闲态时显示绿点；正在跑/待授权时该座位仍归状态点，这时**悬停卡片**里也能看到主机。
+- **悬停卡片新增一行**：`user@host:port`（端口为 22 时省略）+ 远端路径，例如
+  `root@9.134.186.191:36000` / `/home/jimmycppliu/QQMail/blocksvr`。机器在设置页有名字时，标签里补上名字。
+- **当前会话标题栏的主机标签** —— 行内 16px 格子放不下地址，所以打开会话后标题右侧常显
+  `● root@106.52.92.20`（本地会话不显示）。
+- **判定口径与 issue #13 一致**：只有 cwd 落在 `$DSH_HOME/remote-workspaces/<host-user-port>/…`
+  镜像里的会话才算远程；**仅仅是「保存过/设为当前」的机器不会给本地会话打标**。没有镜像 → 不打标
+  （宁可不显示，也不猜一个主机）。
+- **一次请求**：宿主新增 `GET /dsh-remote/bindings` 返回整张镜像登记表，浏览器半只发这一发，
+  再用每个会话自己的 cwd 本地匹配；不是每行一个请求。
+- 三个座位都用 `slots.inject(...)` 注入（而不是假定存在），所以换掉侧栏的组合里不会崩，只是没有标记。
+
+验证：隔离实例（独立 `DSH_HOME` + 独立 Chrome）上对着真实数据端到端跑通 **12/12** —
+绿点只出现在远程行、本地行没有；每个绿点的无障碍标签都指向登记表里真实存在的主机；悬停出主机+路径；
+打开远程会话标题栏出现主机标签、打开本地会话不出现、切回远程又出现。新增 19 个单测（宿主 5 + 浏览器 14），全量单测 **476 pass / 0 fail**。
+
+## 0.8.42 — 2026-10-09
+### 部署高可用：窗口关了，进度不丢
+
+### 部署改为宿主侧后台任务
+
+`install` 原来是**一条长 HTTP 请求**，而 npm 合理地可能跑几分钟。部署过程中窗口一关，响应没了、
+进度全丢——用户无法知道装没装成功，再点一次按钮还会对同一个目录**并发跑第二个 npm**（会损坏
+依赖树）。现在部署跑在**宿主侧**，与任何请求的生命周期解耦：
+
+- **请求 4ms 返回任务句柄**（实测），npm 在后台继续；
+- **每一步的结果实时记录**（含正在执行的步骤名），失败时连结构化详情（步骤列表、提示）一起保留；
+- **重新打开窗口即可续看**：`GET /dsh-remote/web-attach` 现在携带部署任务状态，页面轮询第一拍就能捡回进行中的部署；点「部署并验证」也会**恢复**而不是重启；
+- **一机一次**：同一台机器部署中再点一次，返回同一个任务（实测双击并发：第二个 `resumed:true`、同一个 taskId）；不同机器的部署**并行**（刻意不走全局单飞的 TaskManager）；
+- 完成时结果照常落库（`webAttachCommand` 记到机器上），**没有任何人在看也一样**；
+- 「部署任务」卡片实时渲染：状态、当前步骤 ▶、逐步 ✓/✗、n/m 计数、取消按钮；完成即出现「继续」入口（连接并打开）。
+
+### 真实断连验证（E2E，全部通过）
+
+在独立实例 + 真实远端上按用户场景跑：**发起部署 → 30 秒完全无人观测（= 窗口关闭）→ 重新打开** →
+任务在宿主侧照常跑完（5/5 步全绿）、完整结果与最终命令可读、可再次部署。另外实测双击并发恢复
+（`sameId:true`）。
+
+### 顺带
+
+- 新增 `install-status` / `install-cancel` 动作；`lib/deploy-tasks.js` + 7 个单测
+  （恢复不重启、并发防护、失败详情存活、协作取消、跨机并行）。
+
+## 0.8.41 — 2026-10-09
+### 工作区备份能力整体下线
+
+应用户要求，把 0.8.38 引入、0.8.40 简化的「工作区压缩备份 / 恢复」**整个能力移除**：
+
+- 工具：`rw_backup` / `rw_backup_list` / `rw_restore` 不再注册（25 → **22** 个 `rw_*` 工具）。
+- 设置页「工作区备份」卡片删除；相关 i18n 键（中英各 26 个）全部移除。
+- 路由 `/dsh-remote/backup` 与 `lib/archive.js`、`lib/backup.js`、`lib/routes-backup.js` 三个模块删除。
+- 配置项 `backupDir` / `backupExcludes` / `maxBackupTransferBytes` 从 schema 移除（profile 里残留的这几个键会被 schemastery 忽略，无需清理）。
+- 测试：备份相关 4 个测试文件删除；`settings-render` 改为**断言备份 UI 不再出现**（展开所有折叠区后仍无残留），防止能力回潮。
+
+保留：**远程 dsh 体检/部署**（0.8.40 起部署按钮不再需要先体检）与「远程 DSH 界面挂到本机」。
+
+### 修复：远程 dsh 部署链路上两个真实缺陷（E2E 实测发现）
+
+把「部署 → 在本机窗口打开」在真实远端跑通时抓到两个 bug，均已修复并带回归测试：
+
+1. **`truncate()` 遇到缺失上限会摧毁整个输出**。裸 `new SshPool({...})`（没传 `maxOutputChars`，生产 `apply()` 路径有 schema 默认值所以不触发，但所有直接建池的调用方都中招）时：`'x'.length <= undefined` 恒为 `false` ⇒ 永远走截断分支 ⇒ `s.length - undefined` 打出 `NaN` ⇒ **每一条远程命令的 stdout 都被毁成 29 个字符的截断标记**。后果链条：probe 的 facts 全空 → 装到 `/tmp` 而非 `$HOME` → web-attach 的启动 token 解析不出来 →「90 秒内未报告 token」。修法：非法上限（undefined/NaN/≤0）直接**不截断**返回原串。
+2. **attach 超时路径泄漏远程进程**。等 token 超时抛错时，PID 已解析但清理发生在抛错**之后**且实际不会执行 ⇒ 每次失败重试都在远端多漏一个 `dsh --port 0`（实测连挂三次漏了三个）。修法：抛错**前**先 kill 已记录的 PID（进程自己死掉的场景不 kill，避免无谓指令）。
+
+### 验证
+
+真实远端（Linux）端到端全绿：**体检 → 部署到 `$HOME/.dsh-remote/dsh`（5 步全过）→ 启动远程 `dsh web` → SSH 隧道拉回本机 → 真实 HTTP 303 token 交换 → 真实 WebSocket 升级 `/api/remote.mux` 成功 → 干净关闭（远程进程停止、无残留）**。这就是「远程的 dsh 在本机窗口打开」的完整证明。全量单测 **448 pass / 0 fail**。
+
+## 0.8.40 — 2026-10-08
+### 备份简化成两个按钮 + 远程 dsh 部署不再只给体检
+
+### 备份：只剩「备份」和「恢复」两个按钮
+
+0.8.38 的备份面板把「留个底」做成了配置题：排除项文本框、存放位置（远端/本机/两边）、
+恢复模式（替换/合并），外加每个归档一行的校验/下载/传回/删除。实际用法只有一件事——
+**留个底，需要时再回来**。现在：
+
+- **「备份」** —— 一键把**侧边栏里的所有远程工作区**打包成**一个** `.tar.gz`。
+- **「恢复」** —— 从下拉里选一个备份时间点，一键把**全部**工作区还原。
+- 依赖/构建目录（`node_modules`、`.git`、`dist`、`build`、`target`、`__pycache__`、`.venv`…）
+  **顶层与嵌套都自动排除**，不需要用户决定。校验/下载/删除仍在，但只在选中某个备份后才出现。
+
+**归档是自描述的**：里面带 `dsh-remote-backup.json/manifest.json`（机器、时间、工作区清单、
+排除项、sha256）和一份 `paths.tsv`（归档成员 ↔ 绝对路径）。恢复端**不需要 JSON 解析器**就能
+知道每个工作区该放回哪里；原来的绝对路径建不出来时（例如把另一台机器的归档恢复过来）会退到
+`/tmp/<名字>`，而不是整批失败。
+
+**安全属性没有让步**（都带实测用例）：
+
+- 归档**先校验再动手**：损坏/截断 ⇒ 拒绝，目标**一个字节都不动**。
+- 每个工作区是「旧目录先移到一旁 → 换入新的 → 最后才删旧的」，换入失败会把原目录**移回去**。
+- 归档先写 staging 再 `mv`，**绝不发布截断的归档**；且**先检查所有工作区都存在**，
+  缺一个就整体拒绝——否则「我备份过了」会变成假话。
+- 备份目录在某个工作区里时，会自动排除自己，避免每次备份把上一次的增长进去。
+- 生成脚本里**永不出现 `-P`/`--absolute-names`**（否则越界成员能写出目标之外）。
+
+**这里由真实 shell 抓出三个 bug**（字符串断言全都通过）：
+
+1. `paths.tsv` 注入在 `tar` **之后**，于是 tar 报 `Cannot stat` → 改为两个 manifest 文件都在
+   tar 之前由构造器写出。
+2. 存在性检查用了**归档成员名**（`allws/w1`）而不是**真实路径**（`/tmp/allws/w1`）→ 每次
+   `these workspaces do not exist`。
+3. manifest 文件写在了 staging 目录根下，而 tar 是以 `dsh-remote-backup.json/` 这个**目录**
+   为成员去加的 → 改为先 `mkdir` 这个子目录。
+
+另外修掉一个**不可见的**缺陷：手写的 `*/` 前缀模式里混进了一个零宽空格（U+200B），
+在 diff 里完全看不出来但让模式**匹配不到任何东西**。现在这类模式由裸目录名**派生**，
+并用用例断言全部是可打印 ASCII。
+
+### 远程 dsh 部署：按钮不再被体检门控
+
+「部署并验证」以前只在**先跑过体检、且体检判定有毛病**时才出现
+（`deploy.verdict.canAutoInstall && !deploy.verdict.ok`）。于是只看到体检按钮的用户
+**永远点不到真正干活的按钮**——它在等一次你没有理由去做的检查。宿主侧的 install 动作
+本来就会自己重新体检，所以现在**按钮始终可用**，点击即显式同意。
+
+### 顺带
+
+- 设置页 i18n 清掉 17 个随面板一起作废的键（中英同步，用例保证两边键集一致）。
+- README ×2 的备份说明与配置表按新行为更新。
+
+## 0.8.39 — 2026-10-08
+### 热更新不再丢掉设置页
+
+DSH 0.2 在插件 fiber 被卸载时会把该行写成 `disabled: true` 并写回配置。客户端扫描会跳过禁用行，所以热切换之后宿主还在、设置页的 client 不再下发。`reloadSelf` 现在只清掉卸载期间新打上的禁用标记，再重新挂上；用户本来就禁用的行保持禁用。
+
+## 0.8.38 — 2026-10-06
+### 工作区压缩备份 / 恢复（`rw_backup` / `rw_backup_list` / `rw_restore`）
+
+**新增**
+
+- **`rw_backup`** —— 把远程工作区（或其子目录）打成 `.tar.gz`，可选拉到本机或**两边都留**。
+  归档默认落在远端 `$HOME/.dsh-remote/backups/<工作区><哈希>/`，每个归档配一个
+  `.meta.json` sidecar（工作区路径、条目数、sha256、排除项、时间）。
+- **`rw_backup_list`** —— 列出远端与本机两侧的归档（大小/条目数/时间/校验值）。
+- **`rw_restore`** —— 从某个归档恢复工作区；`mode=replace`（默认）整树替换、
+  `mode=merge` 只覆盖不删除；`where=local` 可从本机副本恢复（先自动传回远端）。
+- **设置页新增「工作区备份」卡片** —— 新建 / 校验 / 下载 / 传回远端 / 恢复 / 删除，
+  含排除项文本框与「整树替换 / 合并」模式选择。
+- **三个新配置项**：`backupDir`、`backupExcludes`（**默认空**）、`maxBackupTransferBytes`。
+
+### 设计取舍（都写在代码注释里，这里给结论）
+
+- **默认全量收录。** 排除项默认为空：备份**静默少打包目录**正是「恢复时静默丢数据」的
+  成因，所以宁可归档大一点，也要让「我备份过」这句话成立。要小归档时显式传 `excludes`
+  （或配 `backupExcludes`）。
+- **归档不可信 ⇒ 恢复前先自证。** 恢复脚本**先** `tar -tzf` 校验归档完整性，归档损坏或
+  被截断就**直接拒绝、目标目录一个字节都不动**。这条有专门的实测用例（往好归档后面追加
+  垃圾字节 ⇒ `ARCH_VERIFY=bad` ⇒ 目标里的 `precious.txt` 仍在）。
+- **替换是「分阶段 → 换入 → 再删旧」而非原地覆盖。** 先解到**兄弟**暂存目录（同一文件系统，
+  所以 `mv` 是原子的），再把旧目录挪到一边、把暂存目录换进目标位，最后才删旧目录；
+  换入失败会把原目录**移回去**。⇒ 一次失败的恢复不会把工作区变成两不像。
+- **备份目录绝不会被自己打进归档。** 若备份目录恰好在工作区内，该子树会被自动排除，
+  否则每次备份都会把上一次的归档再打进去、越滚越大。
+- **文件名安全是一等的。** 所有接受 `file` 参数的动作（列出/校验/恢复/删除/下载）都先过
+  `isSafeArchiveName`：只接受纯 `.tar.gz` 基名，`../`、绝对路径、`a/b`、`; rm -rf /` 一律拒绝。
+  `excludes` 里的 `..` 与绝对路径同样拒绝（**改写会排除得比用户要的更多**，所以是拒绝而非纠正）。
+- **`--exclude` 的语义坑（实测）**：GNU tar 把模式与**归档成员名**匹配，而我们的成员是
+  `./x/y`。实测 `--exclude=src/dist` 能命中任意深度，但 `--exclude=/src/dist` **一条都不排**
+  （静默失效）、`--exclude=./src/dist` 只锚定根。所以用户写的 `/build/`、`./node_modules`
+  都先被规范化成裸模式，且**构建命令前会断言不变量**（传进去就抛错）。
+- **`-P` / `--absolute-names` 永不出现。** 没有它，tar 默认会拒绝 `../` 成员、剥掉绝对路径前缀，
+  归档里的越界路径写不到目标之外。代码里有断言 + 用例。
+
+### 验证
+
+- 新增 **4 个测试文件 / 72 个用例**（`archive` 17、`backup` 31、`backup-routes` 20、
+  `backup-shell-syntax` 4），全绿；`npm test` 与 `check.mjs` 通过。
+- **生成的 shell 过真实 `sh -n`**：4 类构造器 × 路径/引号/`$(...)`/反引号/空格的对抗性输入矩阵，
+  并带**负对照**（`do;`、未闭合 `if`、未闭合引号必须被拒），以及「通配/命令替换必须原样作为
+  **单个**参数传递」的实测断言。
+- **在真实 Linux 主机上跑通全链路**（不是 mock）：`create → list → verify → restore(replace) →
+  restore(merge) → delete → pull → push`；含**字节级往返一致**（递归 `diff -r` 干净、二进制
+  NUL 字节保留）、**损坏归档不破坏目标**、**同名归档不互相覆盖**、**路径含空格**、
+  **文件名以 `-` 开头**、以及跨机往返后 **sha256 不变**。
+
+### 坏配置让整机崩溃 + Agent 连不上已配好的机器（issue #48）
+
+**症状**（issue #48 三连）：①机器用**加密私钥**但没填 passphrase 时，整个 DSH 进程直接
+`fatal load failure: Cannot parse privateKey: Encrypted private OpenSSH key detected, but no
+passphrase given`，且**每次重启都再崩一次**（启动恢复会重拨保存的当前机器）；②Agent 侧
+`rw_connect` 只能填 host/username/port/password/privateKeyPath——passphrase / useAgent /
+keyboardInteractive / hostKeyMode 全都给不了，需要这些字段的机器对 Agent 来说**根本连不上**；
+③也没法让 Agent 复用界面上**已经配好**的机器，只能把整张配置重新敲一遍。
+
+**崩溃根因**：ssh2 在 `Client.connect()` 里**同步**解析私钥，解析失败**同步 throw**。这个
+throw 落在 `buildOpts().then(onFulfilled)` 的回调里，而那条 promise 链没人接管 ⇒ 变成
+**unhandled rejection**（Node 默认行为 = 杀进程），同时外层连接 promise **永远挂起**。
+启动恢复那段 `try/catch` 本来写明了"失败要吞掉"，但它 await 的是挂起的外层 promise，
+对孤儿链上的崩溃**完全无效**——所以坏配置才会每次都把整机带走。
+
+**修法**：
+1. **pool.js**：`client.connect(opts)` 包 try/catch，同步 throw 转成正常的 promise 拒绝。
+   一处改动同时治好三件事：不再崩溃、不再挂起、所有调用点（启动恢复 / test-connect /
+   rw_connect）的 try/catch 恢复生效——坏配置现在就是一条普通错误提示；
+2. **rw_connect 补全字段**：新增 `passphrase` / `useAgent` / `keyboardInteractive` /
+   `hostKeyMode` / `name`；upsert 时**未提供的 secret 保留原值**（以前只保 password，
+   passphrase 会被默认空串抹掉）；
+3. **复用已存机器**：`rw_connect(machineId=...)` 直接用注册表里的整条记录（含钥匙串密码、
+   已存 passphrase、跳板机、ssh-config 别名）并设为当前机器；新增 **`rw_machines`** 工具
+   列出已存机器（id / 地址 / 认证方式旗标 / 别名解析 / 当前标记，**只给旗标不给秘密值**）；
+4. **errors.js**：`Cannot parse privateKey / no passphrase given` 归类为 credentials，提示
+   「私钥已加密但未提供 passphrase」。
+
+测试 +13（`test/issue48.test.js`）：崩溃组带**负对照**——回退 pool 修复后 A1/A4/B3 准时变红
+（连接 promise 挂起 + 捕获到 unhandledRejection），恢复修复后全绿；其余覆盖字段透传、
+passphrase 保留、machineId 连接、rw_machines 脱敏。
+
+顺带修一处**测试隔离缺陷**（本机全量套件因此永挂）：`search-cancel.test.js` 的预算用例
+用 schema 默认值挂载真实插件，而默认 `updateMode=auto`（发起真实 registry 检查）、真实
+`DSH_HOME` 注册表里又存着「当前机器」⇒ 启动恢复**真的 SSH 拨号**（keepalive 长连接），
+用例全绿后进程仍存活 10 分钟以上。现钉 `updateMode:'off'` + 隔离 HOME/DSH_HOME；
+`update-default.test.js` 的挂载门禁同步补上**动态 import** 形态（它原先只认静态
+`from '../lib/index.js'`，这个文件正是从缺口溜出去的）。
+
+## 0.8.37 — 2026-10-05
+### 修复自动更新：热切换从未真正执行过（卸载钩子用了 cordis Entry 不存在的名字）
+
+**症状**：自动更新和「立即更新」都不生效。面板一直停在「磁盘已是 v0.8.36，运行中的仍是
+v0.8.35」—— 新版本已经落盘，但运行中的代码永远换不过去。更糟的是它**静默失败**：
+接口如实返回 `scheduled: true`，所以看上去只是「还没重启」。
+
+**根因**：`reloadSelf` 用来卸载运行中插件的那两个名字，cordis 的 `Entry` **一个都没有**：
+
+```js
+if (typeof entry._dispose === 'function') await entry._dispose()            // undefined
+else if (typeof entry.dispose === 'function') await entry.dispose()          // undefined
+else return { ok: false, reason: 'entry exposes no dispose hook' }            // ← 每次都走这里
+```
+
+0.2.0 实测 `Entry` 的方法集是 `constructor / disabledOf / evaluate / _patchContext /
+refresh / update / _commitVolatile / init / _init`，真正的卸载在 `Entry.update()` 里：
+`this.fiber?.dispose()`。所以每次热切换都在**做任何事之前**就返回失败了，而
+`scheduleSelfReload` 里的 `.catch(() => {})` 把它彻底吞掉。`entry.refresh()` 也**不能**替代
+—— 它是 `if (this.fiber) return; await this.init()`，fiber 还活着时直接返回，等于没重启。
+
+**修法三处**：
+1. 卸载回退到 **`entry.fiber.dispose()`**（宿主若真提供 `_dispose`/`dispose` 仍优先用它）；
+2. **不再吞掉失败** —— 新增 `lastSelfReload()`，`/dsh-remote/update-check` 返回 `lastReload`，
+   失败时打一条日志。会静默失败的自动更新是最糟的一种，这次就是它把缺陷藏了整整两个版本；
+3. 补 3 条回归测试，专门覆盖**真实 Entry 形态**。
+
+**为什么原有测试没抓到**：测试桩 `makeEntryLoader` **总是**提供 `_dispose`，于是永远走第一条
+分支，从未测过真实形态。新测试刻意构造「只有 fiber、没有任何 dispose 钩子」的 entry。
+
+**验证（干净 A/B，唯一变量 = 被测的 update.js）**：用真实安装副本（依赖可解析、`selfDir()`
+正确）对真实 cordis Loader 跑：
+
+| | `reloadSelf` 返回 | 热切换后 apply 记录 |
+|---|---|---|
+| 原版 | `{ok:false, reason:'entry exposes no dispose hook'}` | `["0.8.35"]` ❌ 未切换 |
+| 修复版 | `{ok:true, cleared:2}` | `["0.8.35","0.8.36"]` ✅ 新代码生效 |
+
+### README 移除遥测章节
+
+按用户要求，从 `README.md` 与 `README.en.md` 里删掉「数据采集 / 遥测」整节（含字段表、
+隐私段落与看板链接）。npm 页面渲染的是 `README.md`，所以 npm 介绍同步生效；`package.json`
+的 `description` / `keywords` 从未提及遥测，无需改动。
+
+**心跳实现未动**，隐私边界仍在 `lib/telemetry.js` 顶部注释里（改动者该看的地方）。
+`CONTRIBUTING.md` 中「不接受新增遥测」的贡献政策也保留。
+
+`test/readme-parity.test.js` 的守卫**反转**为「不得再有遥测节」，并能同时抓回潮与
+「删了标题忘删字段表」的残留。
+
+### 顺带
+
+- README 与站点补上「远端 DSH 界面 + 一键体检部署」的能力说明，并重做配图
+- `PUBLISH.md` 固化两件事：Release notes 从 CHANGELOG **机械提取**（防漂移），
+  以及「刚发布时 tarball 404 / `ETARGET` 不是失败」的判据
 
 ## 0.8.36 — 2026-10-03
 ### 自动部署远端 dsh 并验证（体检 → 一键装 → 交给 AI 兜底）+ 新增 `rw_deploy_probe`

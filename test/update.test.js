@@ -357,6 +357,87 @@ test('clearSelfModuleCache honours an explicit package dir', () => {
   }
 })
 
+test('reloadSelf clears the disabled flag DSH 0.2 writes when a fiber is disposed', async () => {
+  // DSH 0.2 loader: disposing a fiber sets options.disabled and writes the
+  // tree. The client scanner then skips that row, so a hot reload brings the
+  // host back without the settings page. A reload is not an uninstall.
+  const calls = []
+  const entry = {
+    options: { id: 'dsh-remote', name: 'dsh-remote' },
+    parent: { tree: { write() { calls.push('write') } } },
+    fiber: {
+      dispose: async () => {
+        calls.push('fiber.dispose')
+        entry.options.disabled = true
+      },
+    },
+    init: async () => { calls.push('init') },
+  }
+  const res = await reloadSelf({ internal: { loadCache: new Map() }, entries: () => [entry] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(entry.options.disabled, undefined)
+  assert.deepEqual(calls, ['fiber.dispose', 'write', 'init'])
+})
+
+test('reloadSelf leaves an entry that was already disabled disabled', async () => {
+  let wrote = false
+  const entry = {
+    options: { id: 'dsh-remote', name: 'dsh-remote', disabled: true },
+    parent: { tree: { write() { wrote = true } } },
+    fiber: { dispose: async () => {} },
+    init: async () => {},
+  }
+  const res = await reloadSelf({ internal: { loadCache: new Map() }, entries: () => [entry] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(entry.options.disabled, true)
+  assert.equal(wrote, false)
+})
+
+test('reloadSelf disposes via entry.fiber when the entry has no dispose hook', async () => {
+  // ★ 回归：cordis 的 Entry **没有** dispose/_dispose（0.2.0 实测方法集：
+  //   constructor/disabledOf/evaluate/_patchContext/refresh/update/_commitVolatile/
+  //   init/_init），真实卸载入口是 entry.fiber.dispose()。
+  //   原实现只探测 _dispose/dispose，于是每次都返回
+  //   "entry exposes no dispose hook"，热切换从未执行 —— 用户看到的
+  //   "磁盘 0.8.36 但运行的仍是 0.8.35" 就是这个。
+  //
+  //   为什么原有测试没抓到：makeEntryLoader 的桩**总是**带 _dispose，
+  //   于是永远走第一条分支。这里刻意用真实形态（只有 fiber）来钉住。
+  const calls = []
+  const entry = {
+    options: { id: 'dsh-remote', name: 'dsh-remote' },
+    // 刻意不提供 _dispose / dispose —— 与真实 cordis Entry 一致
+    fiber: { dispose: async () => { calls.push('fiber.dispose') } },
+    init: async () => { calls.push('init') },
+  }
+  const loader = { internal: { loadCache: new Map() }, entries: () => [entry] }
+  const res = await reloadSelf(loader)
+  assert.equal(res.ok, true, `expected the fiber path to be used, got: ${JSON.stringify(res)}`)
+  assert.deepEqual(calls, ['fiber.dispose', 'init'], 'must dispose the fiber, then re-init the entry')
+})
+
+test('an entry with no dispose path at all is still reported, not silently ignored', async () => {
+  // 两面性：真的没有任何卸载入口时要如实报错（而不是假装成功）。
+  const entry = { options: { id: 'dsh-remote' }, init: async () => {} }
+  const res = await reloadSelf({ internal: { loadCache: new Map() }, entries: () => [entry] })
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /no dispose hook/)
+})
+
+test('reloadSelf prefers an explicit hook over the fiber when both exist', async () => {
+  // 宿主若提供扩展钩子，优先用它（fiber 作为后备）。
+  const calls = []
+  const entry = {
+    options: { id: 'dsh-remote' },
+    _dispose: async () => { calls.push('_dispose') },
+    fiber: { dispose: async () => { calls.push('fiber.dispose') } },
+    init: async () => { calls.push('init') },
+  }
+  const res = await reloadSelf({ internal: { loadCache: new Map() }, entries: () => [entry] })
+  assert.equal(res.ok, true)
+  assert.deepEqual(calls, ['_dispose', 'init'])
+})
+
 /** A loader stub exposing one dsh-remote entry, recording dispose/init calls. */
 function makeEntryLoader(overrides = {}) {
   const calls = []
@@ -393,6 +474,9 @@ test('reloadSelf does not init when dispose fails', async () => {
 })
 
 test('reloadSelf reports a dispose-less entry', async () => {
+  // 注意这里构造的是「连 fiber 也没有」的退化 entry —— 那才是真的无法卸载。
+  // 真实 cordis Entry 属于「无 dispose 钩子、但有 fiber」的形态，
+  // 上面那条 fiber 回归测试覆盖它，两者不要混淆。
   const { loader } = makeEntryLoader({ _dispose: undefined, dispose: undefined })
   const res = await reloadSelf(loader)
   assert.equal(res.ok, false)

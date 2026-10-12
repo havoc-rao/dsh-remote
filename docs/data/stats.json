@@ -1,44 +1,8 @@
 {
-  "generatedAt": "2026-10-03T05:16:31.332Z",
+  "generatedAt": "2026-10-12T05:54:22.865Z",
   "heartbeat": {
     "ok": true,
     "daily": [
-      {
-        "day": "2026-09-04",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-05",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-06",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-07",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-08",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-09",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-10",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-11",
-        "dau": 0
-      },
-      {
-        "day": "2026-09-12",
-        "dau": 0
-      },
       {
         "day": "2026-09-13",
         "dau": 0
@@ -121,123 +85,159 @@
       },
       {
         "day": "2026-10-03",
-        "dau": 134
+        "dau": 257
+      },
+      {
+        "day": "2026-10-04",
+        "dau": 248
+      },
+      {
+        "day": "2026-10-05",
+        "dau": 276
+      },
+      {
+        "day": "2026-10-06",
+        "dau": 331
+      },
+      {
+        "day": "2026-10-07",
+        "dau": 356
+      },
+      {
+        "day": "2026-10-08",
+        "dau": 628
+      },
+      {
+        "day": "2026-10-09",
+        "dau": 727
+      },
+      {
+        "day": "2026-10-10",
+        "dau": 596
+      },
+      {
+        "day": "2026-10-11",
+        "dau": 464
+      },
+      {
+        "day": "2026-10-12",
+        "dau": 411
       }
     ],
-    "installs": 336,
+    "installs": 1681,
     "wau": 20,
     "mau": 20,
     "byVersion": [
       {
-        "version": "0.8.34",
-        "n": 152
+        "version": "0.8.42",
+        "n": 462
       },
       {
-        "version": "0.8.35",
-        "n": 102
+        "version": "0.8.37",
+        "n": 186
       },
       {
         "version": "0.8.36",
-        "n": 38
+        "n": 143
       },
       {
-        "version": "0.8.29",
-        "n": 13
+        "version": "0.8.34",
+        "n": 76
       },
       {
-        "version": "0.8.31",
+        "version": "0.8.35",
+        "n": 45
+      },
+      {
+        "version": "0.8.40",
+        "n": 24
+      },
+      {
+        "version": "0.8.41",
         "n": 10
       },
       {
-        "version": "0.8.28",
+        "version": "0.8.38",
+        "n": 9
+      },
+      {
+        "version": "0.8.39",
         "n": 8
       },
       {
-        "version": "0.8.25",
+        "version": "0.8.28",
         "n": 7
       },
       {
-        "version": "0.8.26",
+        "version": "0.8.29",
+        "n": 7
+      },
+      {
+        "version": "0.8.31",
+        "n": 7
+      },
+      {
+        "version": "0.8.25",
+        "n": 6
+      },
+      {
+        "version": "0.8.43",
         "n": 3
+      },
+      {
+        "version": "0.8.26",
+        "n": 2
       },
       {
         "version": "0.8.27",
         "n": 1
       },
       {
-        "version": "0.8.32",
+        "version": "0.0.0-probe2",
         "n": 1
       },
       {
-        "version": "0.8.30",
+        "version": "0.8.99",
+        "n": 1
+      },
+      {
+        "version": "0.8.38-rc2",
+        "n": 1
+      },
+      {
+        "version": "0.8.38-rc3",
         "n": 1
       }
     ],
     "byPlatform": [
       {
         "platform": "win32",
-        "n": 231
+        "n": 666
       },
       {
         "platform": "linux",
-        "n": 60
+        "n": 194
       },
       {
         "platform": "darwin",
-        "n": 44
+        "n": 135
       },
       {
         "platform": "other",
-        "n": 1
+        "n": 5
       }
     ],
     "tz": "Asia/Shanghai",
-    "generatedAt": "2026-10-03T05:16:28.724Z"
+    "generatedAt": "2026-10-12T05:54:20.382Z"
   },
   "heartbeatError": null,
   "npm": {
     "package": "dsh-remote",
-    "checkedAt": "2026-10-03T05:16:30.957Z",
-    "latest": "0.8.36",
-    "lastWeek": 3676,
-    "lastMonth": 9626,
+    "checkedAt": "2026-10-12T05:54:22.548Z",
+    "latest": "0.8.42",
+    "lastWeek": 5044,
+    "lastMonth": 14560,
     "daily": [
-      {
-        "day": "2026-09-02",
-        "downloads": 186
-      },
-      {
-        "day": "2026-09-03",
-        "downloads": 0
-      },
-      {
-        "day": "2026-09-04",
-        "downloads": 440
-      },
-      {
-        "day": "2026-09-05",
-        "downloads": 296
-      },
-      {
-        "day": "2026-09-06",
-        "downloads": 226
-      },
-      {
-        "day": "2026-09-07",
-        "downloads": 0
-      },
-      {
-        "day": "2026-09-08",
-        "downloads": 0
-      },
-      {
-        "day": "2026-09-09",
-        "downloads": 423
-      },
-      {
-        "day": "2026-09-10",
-        "downloads": 283
-      },
       {
         "day": "2026-09-11",
         "downloads": 215
@@ -321,20 +321,55 @@
       {
         "day": "2026-10-01",
         "downloads": 328
+      },
+      {
+        "day": "2026-10-02",
+        "downloads": 900
+      },
+      {
+        "day": "2026-10-03",
+        "downloads": 844
+      },
+      {
+        "day": "2026-10-04",
+        "downloads": 294
+      },
+      {
+        "day": "2026-10-05",
+        "downloads": 0
+      },
+      {
+        "day": "2026-10-06",
+        "downloads": 0
+      },
+      {
+        "day": "2026-10-07",
+        "downloads": 305
+      },
+      {
+        "day": "2026-10-08",
+        "downloads": 1827
+      },
+      {
+        "day": "2026-10-09",
+        "downloads": 1949
+      },
+      {
+        "day": "2026-10-10",
+        "downloads": 669
       }
     ],
     "zeroDays": [
-      "2026-09-03",
-      "2026-09-07",
-      "2026-09-08",
-      "2026-09-15"
+      "2026-09-15",
+      "2026-10-05",
+      "2026-10-06"
     ],
     "note": "npm daily counts have reporting gaps; zero-value days are flagged and are not real zero usage."
   },
   "repo": {
-    "stars": 115,
-    "forks": 25,
-    "openIssues": 2,
-    "pushedAt": "2026-10-03T04:27:43Z"
+    "stars": 133,
+    "forks": 28,
+    "openIssues": 4,
+    "pushedAt": "2026-10-11T21:56:30Z"
   }
 }
