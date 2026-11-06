@@ -408,13 +408,13 @@
   },
   {
     "day": "2026-11-06",
-    "at": "2026-11-06T06:56:24.287Z",
+    "at": "2026-11-06T19:29:01.718Z",
     "dau": null,
     "wau": null,
     "mau": null,
     "installs": null,
-    "npmLastWeek": 32057,
-    "stars": 257,
-    "forks": 44
+    "npmLastWeek": 31053,
+    "stars": 258,
+    "forks": 45
   }
 ]
