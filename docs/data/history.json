@@ -603,5 +603,16 @@
     "npmLastWeek": 101250,
     "stars": 347,
     "forks": 64
+  },
+  {
+    "day": "2026-11-24",
+    "at": "2026-11-24T10:01:18.886Z",
+    "dau": null,
+    "wau": null,
+    "mau": null,
+    "installs": null,
+    "npmLastWeek": 101250,
+    "stars": 350,
+    "forks": 65
   }
 ]
