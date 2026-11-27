@@ -639,12 +639,12 @@
   },
   {
     "day": "2026-11-27",
-    "at": "2026-11-27T08:44:28.604Z",
+    "at": "2026-11-27T21:25:07.541Z",
     "dau": null,
     "wau": null,
     "mau": null,
     "installs": null,
-    "npmLastWeek": 139808,
+    "npmLastWeek": 143907,
     "stars": 363,
     "forks": 71
   }
